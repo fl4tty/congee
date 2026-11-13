@@ -53,8 +53,10 @@ sensor lines just hide themselves or show `N/A`.
 
 ### Easiest: the setup wizard
 
-Run `congee-setup-1.0.0.exe` (in `installer\Output\` after [building it](#building-the-installer)). It needs no admin
-rights and installs for your user only, into `%LOCALAPPDATA%\Programs\congee`.
+Download `congee-setup-<version>.exe` from the [latest release](https://github.com/fl4tty/congee/releases/latest)
+and run it, or [build it yourself](#building-the-installer). It needs no admin rights and installs for your user
+only, into `%LOCALAPPDATA%\Programs\congee`. The installer isn't code-signed, so Windows SmartScreen may warn you:
+choose *More info* → *Run anyway*.
 
 1. **Choose the edition:** .NET, Python, or both.
 2. **Choose extras:** start congee with Windows, desktop shortcut.
