@@ -63,15 +63,30 @@ public sealed class CongeeWindow : Window
         TextOptions.SetTextFormattingMode(surface, TextFormattingMode.Display);
         RenderOptions.SetEdgeMode(surface, EdgeMode.Aliased);
 
+        // One menu, shown from the tray icon and (when click_through is off) by right-clicking the widget
+        var items = new List<TrayIcon.Item>
+        {
+            new("Hide widget", ToggleVisible, () => IsVisible ? "Hide widget" : "Show widget"),
+            new("Edit config", () => Shell(this.configPath)),
+            new("Open config folder", () => Shell(Path.GetDirectoryName(this.configPath)!)),
+            new("Reload config", Reload),
+            new("Reset position", () => { userPos = null; geom = null; Render(); }),
+            new("", null),
+            new("Exit congee", () => Application.Current.Shutdown()),
+        };
         var menu = new ContextMenu();
-        void Item(string header, Action a) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => a(); menu.Items.Add(mi); }
-        Item("Reload config", Reload);
-        Item("Edit config", () => Process.Start(new ProcessStartInfo(this.configPath) { UseShellExecute = true }));
-        Item("Open folder", () => Process.Start(new ProcessStartInfo(Path.GetDirectoryName(this.configPath)!) { UseShellExecute = true }));
-        Item("Reset position", () => { userPos = null; geom = null; Render(); });
-        menu.Items.Add(new Separator());
-        Item("Quit", () => Application.Current.Shutdown());
+        foreach (var it in items)
+        {
+            if (it.Action == null) { menu.Items.Add(new Separator()); continue; }
+            var mi = new MenuItem { Header = it.Text };
+            mi.Click += (_, _) => it.Action();
+            menu.Items.Add(mi);
+        }
         ContextMenu = menu;
+        string name = Path.GetFileName(this.configPath);
+        TrayIcon? tray = null;
+        Loaded += (_, _) => tray ??= new TrayIcon(name == "congee.conf" ? "congee" : $"congee - {name}", items);
+        Closed += (_, _) => tray?.Dispose();
 
         MouseLeftButtonDown += (_, e) =>
         {
@@ -94,6 +109,15 @@ public sealed class CongeeWindow : Window
             dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
             Reload();
         };
+    }
+
+    static void Shell(string path) => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+
+    void ToggleVisible()
+    {
+        if (IsVisible) { Hide(); return; }
+        Show();
+        ApplyWindowStyles();
     }
 
     // ---- config -------------------------------------------------------------------------------

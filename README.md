@@ -153,8 +153,25 @@ Command-line options (the same in both editions; Python ones run as `.venv\Scrip
 | `--help` | Show all options |
 
 **Using the widget:**
-- **Right-click** on its text for Reload config, Edit config, Open folder, Reset position and Quit.
-- **Left-drag** it to move it until the next reload (`draggable no` turns this off; set `gap_x`/`gap_y` to place it permanently).
+- **Tray icon:** congee puts its icon in the notification area (system tray, next to the clock). Click or right-click it for:
+
+  | Menu item | Does |
+  |---|---|
+  | Hide widget / Show widget | Hide the widget without stopping it (e.g. while gaming or screen-sharing) |
+  | Edit config | Open the config file in use |
+  | Open config folder | Open the folder that holds it |
+  | Reload config | Re-read the config now (saving the file also does this) |
+  | Reset position | Move it back to where the config places it, after dragging |
+  | Exit congee | Stop congee |
+
+  Windows 11 tucks new tray icons behind the **^** arrow. To keep congee's icon on the taskbar, go to
+  **Settings → Personalization → Taskbar → Other system tray icons** and turn on **congee**, or drag the icon out of
+  the **^** panel onto the taskbar. Each running copy has its own icon; its tooltip names the config file if it isn't
+  the default `congee.conf`.
+- **Right-click** the widget's text for the same menu. With a transparent background, clicks between the letters go
+  through to the desktop, so aim at the text itself. With `click_through yes`, only the tray icon works.
+- **Left-drag** it to move it until the next reload (`draggable no` turns this off; set `gap_x`/`gap_y` to place it
+  permanently).
 - It sits on the desktop: above the wallpaper, below every app window, and not in the taskbar or Alt-Tab.
 
 ## Configure
@@ -168,11 +185,11 @@ Without `-c`, congee uses the first of these files that exists, like conky's `~/
 3. `%USERPROFILE%\.congeerc`
 4. `congee.conf` next to the program: the bundled default, which is also the template
 
-Right-click → **Edit config** always opens the file in use. To start over, delete your copy and run `--create-config` again.
+Tray icon → **Edit config** always opens the file in use. To start over, delete your copy and run `--create-config` again.
 
 ### Editing it
 
-1. Open the config (right-click the widget → **Edit config**).
+1. Open the config (tray icon → **Edit config**).
 2. Change something and save. The widget redraws within a second; no restart is needed.
 3. If you make a mistake, the widget shows the error in red instead of crashing.
 
@@ -215,7 +232,7 @@ CPU ${cpu}% ${cpubar}
 | Change colours | `default_color white`, `color1 88c0d0`, then `${color1}…${color}` in the template |
 | Give it a background | `own_window_transparent no`, `own_window_colour 101418`, `own_window_argb_value 180` |
 | Keep it above other windows | `own_window_type override` |
-| Let clicks pass through it | `click_through yes` (this disables the right-click menu, so edit the file to undo it) |
+| Let clicks pass through it | `click_through yes` (the right-click menu then only works from the tray icon) |
 | Update less often | `update_interval 2` |
 | Right-align part of a line | `Label${alignr}value` |
 | Line things up in columns | `Name${goto 170}Value` |
@@ -278,7 +295,7 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `own_window_colour` | `#101418` | Background colour when not transparent |
 | `own_window_argb_value` | 200 | Background opacity, 0–255 |
 | `border_inner_margin` | 8 | Padding |
-| `click_through` | no | `yes` lets clicks pass through (disables the right-click menu) |
+| `click_through` | no | `yes` lets clicks pass through (use the tray icon for the menu) |
 | `draggable` | yes | Left-drag to move |
 | `uppercase` | no | Show all text in capitals |
 | `dpi_scale` | auto | Scales pixel values (gaps, sizes, goto) to the display DPI. Set `1` for raw pixels |
@@ -312,12 +329,13 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 
 | Problem | Fix |
 |---|---|
-| Nothing appears | Check it's running (Task Manager: `pythonw.exe` or `congee.exe`). Run `--once` from a terminal to see errors. Right-click → **Reset position** if you dragged it off-screen |
-| Two widgets drawn on top of each other | Both editions, or two copies, are running with the same config. Quit one (right-click → **Quit**) |
+| How do I stop it? | Tray icon → **Exit congee**. If you don't see the icon, click the **^** next to the clock |
+| Nothing appears | Look for the tray icon: if it's there, try its **Show widget** and **Reset position**. Otherwise run `--once` from a terminal to see errors |
+| Two widgets drawn on top of each other | Both editions, or two copies, are running with the same config. Each has a tray icon: **Exit congee** on one |
 | Temperatures/fans show `N/A`, or "start LibreHardwareMonitor" | LHM isn't running, or its web server is off: **Options → Remote Web Server → Run**. Check with `--sensors` |
 | GPU section missing | `--sensors` lists the GPUs LHM found. Check the `gpu` setting matches one, or set it back to `auto` |
 | Wrong GPU on a laptop | Set `gpu` to part of the card's name (e.g. `gpu GeForce`) or its number from `--sensors` |
-| Can't right-click it any more | `click_through yes` is set. Edit the config file directly and change it to `no` |
+| Can't right-click it any more | `click_through yes` is set. Use the tray icon, or change it to `no` (tray icon → **Edit config**) |
 | Python edition stopped starting after moving the folder | Delete `.venv` and redo the [Python install step](#python-edition) |
 | `congee.exe` says .NET is missing | Install the .NET 10 Desktop Runtime: `winget install Microsoft.DotNet.DesktopRuntime.10` |
 
@@ -331,6 +349,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 congee\
 ├── congee.py          Python edition (single file)
 ├── congee.conf        Default config / template for both editions
+├── congee.ico         App and tray icon (made by tools\make_icon.ps1)
 ├── start.bat          Starts the Python edition without a console window
 ├── requirements.txt   Python dependencies (psutil)
 ├── README.md
@@ -338,12 +357,15 @@ congee\
 ├── installer\         Setup wizard (Inno Setup)
 │   ├── congee.iss         Installer script: editions, dependency page, shortcuts
 │   ├── build.ps1          Builds installer\Output\congee-setup-<version>.exe
+│   ├── stop-congee.ps1    Closes running copies before upgrade/uninstall
 │   └── Output\            Built installer (not in git)
+├── tools\make_icon.ps1 Draws congee.ico
 ├── LICENSE            GPL-3.0
 └── dotnet\            .NET edition (C#, WPF)
     ├── Congee.csproj
     ├── Program.cs         Command-line options and startup
     ├── CongeeWindow.cs    The transparent desktop window and drawing
+    ├── TrayIcon.cs        System tray icon and menu
     ├── Evaluator.cs       Turns the template into text, bars and graphs
     ├── Config.cs          Config file search and parsing
     ├── Stats.cs           CPU, memory, disk, network, process stats

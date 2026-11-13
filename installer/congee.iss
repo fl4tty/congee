@@ -8,7 +8,7 @@
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
 
 #define AppName "congee"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 
 [Setup]
 AppId={{6C7B1E64-3F0A-4E2B-9B7C-2C0E5A1D9F43}
@@ -30,7 +30,8 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 UninstallDisplayName={#AppName}
-UninstallDisplayIcon={app}\congee.exe
+UninstallDisplayIcon={app}\congee.ico
+SetupIconFile=..\congee.ico
 
 [Types]
 Name: "dotnet"; Description: ".NET edition (recommended)"
@@ -56,21 +57,25 @@ Source: "..\congee.conf"; DestDir: "{app}\python"; Components: python; Flags: ig
 Source: "..\requirements.txt"; DestDir: "{app}\python"; Components: python; Flags: ignoreversion
 Source: "..\start.bat"; DestDir: "{app}\python"; Components: python; Flags: ignoreversion
 ; Shared
+Source: "..\congee.ico"; DestDir: "{app}\python"; Components: python; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\congee.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "stop-congee.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "stop-congee.ps1"; Flags: dontcopy
 ; The user's own config: created once, never overwritten or removed
 Source: "..\congee.conf"; DestDir: "{userappdata}\congee"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\congee"; Filename: "{app}\congee.exe"; Components: dotnet
-Name: "{group}\congee (Python edition)"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Components: python
+Name: "{group}\congee (Python edition)"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Components: python
 Name: "{group}\Edit congee config"; Filename: "{userappdata}\congee\congee.conf"
 Name: "{group}\congee README"; Filename: "{app}\README.md"
 Name: "{group}\Uninstall congee"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\congee"; Filename: "{app}\congee.exe"; Tasks: desktopicon; Components: dotnet
-Name: "{userdesktop}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Tasks: desktopicon; Check: PythonIsMain
+Name: "{userdesktop}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Tasks: desktopicon; Check: PythonIsMain
 ; Only one edition at sign-in (two would draw on top of each other): .NET if installed
 Name: "{userstartup}\congee"; Filename: "{app}\congee.exe"; Tasks: startup; Components: dotnet
-Name: "{userstartup}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Tasks: startup; Check: PythonIsMain
+Name: "{userstartup}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Tasks: startup; Check: PythonIsMain
 
 [Run]
 Filename: "{code:LhmExe}"; Description: "Start LibreHardwareMonitor now (asks for admin)"; Verb: "runas"; Flags: postinstall shellexec nowait skipifsilent; Check: LhmInstalled
@@ -78,8 +83,7 @@ Filename: "{app}\congee.exe"; Description: "Start congee now"; Flags: postinstal
 Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Description: "Start congee now"; Flags: postinstall nowait skipifsilent; Check: PythonIsMain and VenvReady
 
 [UninstallRun]
-Filename: "{sys}\taskkill.exe"; Parameters: "/im congee.exe /f"; Flags: runhidden; RunOnceId: "KillDotnet"
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -Command ""Get-CimInstance Win32_Process -Filter \""Name='pythonw.exe'\"" | Where-Object CommandLine -like '*congee.py*' | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }"""; Flags: runhidden; RunOnceId: "KillPython"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\stop-congee.ps1"""; Flags: runhidden; RunOnceId: "StopCongee"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\python\.venv"
@@ -365,9 +369,9 @@ procedure StopRunningCongee();
 var
   Code: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/im congee.exe /f', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  ExtractTemporaryFile('stop-congee.ps1');
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-       '-NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name=''pythonw.exe''\" | Where-Object CommandLine -like ''*congee.py*'' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"',
+       ExpandConstant('-NoProfile -ExecutionPolicy Bypass -File "{tmp}\stop-congee.ps1"'),
        '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 

@@ -9,8 +9,9 @@
     <AssemblyName>congee</AssemblyName>
     <RootNamespace>Congee</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\congee.ico</ApplicationIcon>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <!-- Always-on widget: favour a small, steady footprint over GC throughput -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>false</TieredPGO>

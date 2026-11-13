@@ -1037,6 +1037,162 @@ def monitor_work_areas(root: tk.Tk) -> list[tuple[int, int, int, int]]:
 
 
 # --------------------------------------------------------------------------
+# Systray icon
+# --------------------------------------------------------------------------
+ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "congee.ico")
+
+if IS_WINDOWS:
+    LRESULT = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", wt.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                    ("cbWndExtra", ctypes.c_int), ("hInstance", wt.HINSTANCE), ("hIcon", wt.HICON),
+                    ("hCursor", wt.HANDLE), ("hbrBackground", wt.HBRUSH), ("lpszMenuName", wt.LPCWSTR),
+                    ("lpszClassName", wt.LPCWSTR)]
+
+    class NOTIFYICONDATAW(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("hWnd", wt.HWND), ("uID", wt.UINT), ("uFlags", wt.UINT),
+                    ("uCallbackMessage", wt.UINT), ("hIcon", wt.HICON), ("szTip", wt.WCHAR * 128),
+                    ("dwState", wt.DWORD), ("dwStateMask", wt.DWORD), ("szInfo", wt.WCHAR * 256),
+                    ("uVersion", wt.UINT), ("szInfoTitle", wt.WCHAR * 64), ("dwInfoFlags", wt.DWORD),
+                    ("guidItem", ctypes.c_ubyte * 16), ("hBalloonIcon", wt.HICON)]
+
+    user32.DefWindowProcW.restype = LRESULT
+    user32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    user32.CreateWindowExW.restype = wt.HWND
+    user32.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, wt.HWND, wt.HMENU, wt.HINSTANCE, wt.LPVOID]
+    user32.LoadImageW.restype = wt.HANDLE
+    user32.LoadImageW.argtypes = [wt.HINSTANCE, wt.LPCWSTR, wt.UINT, ctypes.c_int, ctypes.c_int, wt.UINT]
+    user32.LoadIconW.restype = wt.HICON
+    user32.LoadIconW.argtypes = [wt.HINSTANCE, wt.LPVOID]
+    user32.CreatePopupMenu.restype = wt.HMENU
+    user32.AppendMenuW.argtypes = [wt.HMENU, wt.UINT, ctypes.c_size_t, wt.LPCWSTR]
+    user32.TrackPopupMenuEx.argtypes = [wt.HMENU, wt.UINT, ctypes.c_int, ctypes.c_int, wt.HWND, wt.LPVOID]
+    user32.DestroyMenu.argtypes = [wt.HMENU]
+    user32.SetForegroundWindow.argtypes = [wt.HWND]
+    user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    user32.DestroyWindow.argtypes = [wt.HWND]
+    user32.DestroyIcon.argtypes = [wt.HICON]
+    user32.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
+    user32.TranslateMessage.argtypes = [ctypes.POINTER(wt.MSG)]
+    user32.DispatchMessageW.restype = LRESULT
+    user32.DispatchMessageW.argtypes = [ctypes.POINTER(wt.MSG)]
+    shell32 = ctypes.windll.shell32
+    shell32.Shell_NotifyIconW.argtypes = [wt.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
+
+
+class Tray:
+    """Notification-area icon with a native right-click menu (same as the .NET edition).
+    It runs on its own thread with its own Win32 message loop: tkinter must not be called
+    from inside a foreign window procedure, so a chosen menu item is only put on a queue,
+    and the Tk thread picks it up with poll() and runs it as a normal Tk callback."""
+    WM_TRAY = 0x8001
+    WM_LBUTTONUP, WM_RBUTTONUP = 0x0202, 0x0205
+    WM_CLOSE, WM_DESTROY = 0x0010, 0x0002
+
+    def __init__(self, tip: str, items: list, on_close):
+        import queue
+        self.tip, self.items = tip, items  # items: (label | callable -> label, action | None)
+        self.on_close = on_close  # run if something else closes the tray window (e.g. setup upgrading congee)
+        self.closing = False
+        self.actions: queue.SimpleQueue = queue.SimpleQueue()
+        self.hwnd = None
+        self.hicon = None
+        self.added = False
+        self.taskbar_created = -1
+        ready = threading.Event()
+        threading.Thread(target=self._run, args=(ready,), name="congee-tray", daemon=True).start()
+        ready.wait(5)
+
+    def poll(self):
+        """Run any menu choices made since the last call (call this on the Tk thread)."""
+        while not self.actions.empty():
+            self.actions.get_nowait()()
+
+    # ---- tray thread --------------------------------------------------------
+    def _run(self, ready):
+        try:
+            try:  # dark menu when Windows apps are set to dark (uxtheme ordinals 135/136)
+                ctypes.windll.uxtheme[135](1)
+                ctypes.windll.uxtheme[136]()
+            except Exception:  # noqa: BLE001
+                pass
+            hinst = ctypes.windll.kernel32.GetModuleHandleW(None)
+            self._proc = WNDPROC(self._wndproc)  # keep a reference or ctypes frees the callback
+            wc = WNDCLASSW(lpfnWndProc=self._proc, hInstance=hinst, lpszClassName="congee_tray")
+            user32.RegisterClassW(ctypes.byref(wc))
+            self.taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
+            self.hwnd = user32.CreateWindowExW(0, "congee_tray", "congee tray", 0, 0, 0, 0, 0,
+                                               None, None, hinst, None)
+            size = user32.GetSystemMetricsForDpi(49, user32.GetDpiForSystem())  # SM_CXSMICON
+            if os.path.exists(ICON_FILE):
+                self.hicon = user32.LoadImageW(None, ICON_FILE, 1, size, size, 0x10)  # LR_LOADFROMFILE
+            self.hicon = self.hicon or user32.LoadIconW(None, ctypes.c_void_p(32512))  # IDI_APPLICATION
+            self._notify(0)  # NIM_ADD
+        finally:
+            ready.set()
+        msg = wt.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+    def _data(self):
+        d = NOTIFYICONDATAW()
+        d.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        d.hWnd, d.uID = self.hwnd, 1
+        d.uFlags = 1 | 2 | 4  # NIF_MESSAGE | NIF_ICON | NIF_TIP
+        d.uCallbackMessage, d.hIcon, d.szTip = self.WM_TRAY, self.hicon, self.tip[:127]
+        return d
+
+    def _notify(self, msg):
+        ok = bool(shell32.Shell_NotifyIconW(msg, ctypes.byref(self._data())))
+        if msg == 0:
+            self.added = ok
+
+    def _wndproc(self, hwnd, msg, wparam, lparam):
+        if msg == self.WM_TRAY and (lparam & 0xFFFF) in (self.WM_LBUTTONUP, self.WM_RBUTTONUP):
+            self._show_menu()
+            return 0
+        if msg == self.taskbar_created:  # Explorer restarted: the old icon is gone
+            self._notify(0)
+        elif msg == self.WM_DESTROY:  # Exit, or another program sending WM_CLOSE: don't leave a dead icon
+            if self.added:
+                self._notify(2)
+                self.added = False
+            if not self.closing:
+                self.actions.put(self.on_close)
+            user32.PostQuitMessage(0)
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _show_menu(self):
+        menu = user32.CreatePopupMenu()
+        for i, (label, action) in enumerate(self.items):
+            if action is None:
+                user32.AppendMenuW(menu, 0x800, 0, None)  # MF_SEPARATOR
+            else:
+                user32.AppendMenuW(menu, 0, i + 1, label() if callable(label) else label)
+        pt = wt.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        user32.SetForegroundWindow(self.hwnd)  # so the menu closes when you click elsewhere
+        cmd = user32.TrackPopupMenuEx(menu, 0x2 | 0x100 | 0x80, pt.x, pt.y, self.hwnd, None)
+        user32.PostMessageW(self.hwnd, 0, 0, 0)
+        user32.DestroyMenu(menu)
+        if 0 < cmd <= len(self.items) and self.items[cmd - 1][1]:
+            self.actions.put(self.items[cmd - 1][1])
+
+    def remove(self):
+        """Take the icon out of the tray and end the tray thread (any thread may call this)."""
+        self.closing = True
+        if self.added:
+            self._notify(2)  # NIM_DELETE
+            self.added = False
+        if self.hwnd:
+            user32.PostMessageW(self.hwnd, self.WM_CLOSE, 0, 0)  # DefWindowProc destroys it on its own thread
+
+
+# --------------------------------------------------------------------------
 # The window
 # --------------------------------------------------------------------------
 class Congee:
@@ -1060,14 +1216,33 @@ class Congee:
         self.after_ids: list[str] = []
         self.drag_from = None
 
+        # One menu, shown from the tray icon and (when click_through is off) by right-clicking the widget
+        self.hidden = False
+        items = [
+            (lambda: "Show widget" if self.hidden else "Hide widget", self.toggle_visible),
+            ("Edit config", lambda: os.startfile(self.config_path)),
+            ("Open config folder", lambda: os.startfile(os.path.dirname(self.config_path))),
+            ("Reload config", self.reload),
+            ("Reset position", self.reset_position),
+            ("", None),
+            ("Exit congee", self.quit),
+        ]
         self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="Reload config", command=self.reload)
-        self.menu.add_command(label="Edit config", command=lambda: os.startfile(self.config_path))
-        self.menu.add_command(label="Open folder", command=lambda: os.startfile(os.path.dirname(self.config_path)))
-        self.menu.add_command(label="Reset position", command=self.reset_position)
-        self.menu.add_separator()
-        self.menu.add_command(label="Quit", command=self.root.destroy)
+        for label, action in items:
+            if action is None:
+                self.menu.add_separator()
+            else:
+                self.menu.add_command(label=label() if callable(label) else label, command=action)
         self.canvas.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
+        name = os.path.basename(self.config_path)
+        self.tray = None
+        if IS_WINDOWS:
+            try:
+                self.tray = Tray("congee" if name == "congee.conf" else f"congee - {name}", items, self.quit)
+                self.root.after(200, self.poll_tray)
+            except Exception as e:  # noqa: BLE001  (the widget still works without a tray icon)
+                print(f"congee: no tray icon: {e}", file=sys.stderr)
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
 
@@ -1129,6 +1304,26 @@ class Congee:
         self.user_pos = None
         self.geom = None
         self.render()
+
+    def poll_tray(self):
+        if self.tray:
+            self.tray.poll()
+            self.root.after(200, self.poll_tray)
+
+    def toggle_visible(self):
+        self.hidden = not self.hidden
+        if self.hidden:
+            self.root.withdraw()
+        else:
+            self.root.deiconify()
+            self.root.update_idletasks()
+            self.apply_window_styles()
+
+    def quit(self):
+        if self.tray:
+            self.tray.remove()
+            self.tray = None
+        self.root.destroy()
 
     # ---- win32 ------------------------------------------------------------
     def apply_window_styles(self):
@@ -1410,7 +1605,11 @@ class Congee:
             y += lh
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            if self.tray:  # e.g. Ctrl+C in a console: don't leave a dead icon behind
+                self.tray.remove()
 
 
 # --------------------------------------------------------------------------
