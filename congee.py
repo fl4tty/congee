@@ -430,6 +430,98 @@ class Sensors:
 
 
 # --------------------------------------------------------------------------
+# Drives and GPU drivers
+# --------------------------------------------------------------------------
+def list_drives(include_all: bool = False) -> list[tuple[str, str]]:
+    """Ready drives as (root, volume label): fixed, removable (USB) and RAM disks;
+    include_all adds network and optical drives. Empty card readers etc. are skipped."""
+    if not IS_WINDOWS:
+        return [(p.mountpoint, "") for p in psutil.disk_partitions()]
+    k32 = ctypes.windll.kernel32
+    wanted = {2, 3, 6} | ({4, 5} if include_all else set())  # DRIVE_REMOVABLE, FIXED, RAMDISK (+ REMOTE, CDROM)
+    mask = k32.GetLogicalDrives()
+    out, seen = [], set()
+    old_mode = k32.SetErrorMode(0x0001)  # SEM_FAILCRITICALERRORS: no "insert a disk" dialogs
+    try:
+        for i in range(26):
+            if not (mask >> i) & 1:
+                continue
+            root = chr(65 + i) + ":\\"
+            if k32.GetDriveTypeW(root) not in wanted:
+                continue
+            label, serial = ctypes.create_unicode_buffer(261), wt.DWORD()
+            if not k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0):
+                continue  # not ready (empty card reader, disconnected share)
+            if serial.value and serial.value in seen:
+                continue  # same volume under another letter (subst, second mount point)
+            seen.add(serial.value)
+            out.append((root, label.value))
+    finally:
+        k32.SetErrorMode(old_mode)
+    return out
+
+
+DISPLAY_CLASS_KEY = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+DRIVER_FIELDS = ("DriverDesc", "ProviderName", "DriverVersion", "DriverDate", "RadeonSoftwareVersion", "MatchingDeviceId")
+
+
+def read_gpu_drivers() -> list[dict]:
+    """Installed display drivers, from the registry's display-adapter class key.
+    Works for any vendor and needs no admin rights or LibreHardwareMonitor."""
+    if not IS_WINDOWS:
+        return []
+    import winreg
+    out = []
+    try:
+        cls = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, DISPLAY_CLASS_KEY)
+    except OSError:
+        return out
+    with cls:
+        i = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(cls, i)
+            except OSError:
+                break
+            i += 1
+            if not sub.isdigit():  # 0000, 0001, ... (skips "Properties", "Configuration")
+                continue
+            try:
+                with winreg.OpenKey(cls, sub) as k:
+                    d = {}
+                    for f in DRIVER_FIELDS:
+                        try:
+                            d[f] = str(winreg.QueryValueEx(k, f)[0]).strip()
+                        except OSError:
+                            d[f] = ""
+            except OSError:
+                continue
+            if d["DriverDesc"] and d["DriverVersion"]:
+                out.append(d)
+    return out
+
+
+def driver_release(d: dict) -> str:
+    """The version number people know: AMD Software (Adrenalin) version, NVIDIA's release
+    number (Windows version 32.0.15.8157 -> 581.57), otherwise the Windows driver version."""
+    if d.get("RadeonSoftwareVersion"):
+        return d["RadeonSoftwareVersion"]
+    ver = d.get("DriverVersion", "")
+    if "nvidia" in d.get("ProviderName", "").lower() or "VEN_10DE" in d.get("MatchingDeviceId", "").upper():
+        parts = ver.split(".")
+        if len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
+            digits = (parts[2] + parts[3].zfill(4))[-5:]
+            return f"{int(digits[:3])}.{digits[3:]}"
+    return ver
+
+
+def driver_date(d: dict) -> str:
+    """Registry dates are M-D-YYYY; show them as YYYY-MM-DD."""
+    m = re.fullmatch(r"(\d{1,2})-(\d{1,2})-(\d{4})", d.get("DriverDate", ""))
+    return f"{m[3]}-{int(m[1]):02d}-{int(m[2]):02d}" if m else d.get("DriverDate", "")
+
+
+# --------------------------------------------------------------------------
 # System stats, sampled once per tick
 # --------------------------------------------------------------------------
 class Stats:
@@ -452,6 +544,7 @@ class Stats:
         self.boot = psutil.boot_time()
         self.sensors = Sensors()
         self._cache: dict = {}
+        self._timed: dict = {}
 
     def sample(self):
         now = time.monotonic()
@@ -484,6 +577,21 @@ class Stats:
         if key not in self._cache:
             self._cache[key] = fn()
         return self._cache[key]
+
+    def timed(self, key, ttl: float, fn):
+        """Like cached(), but keeps the value for ttl seconds (for things that rarely change)."""
+        now = time.monotonic()
+        hit = self._timed.get(key)
+        if hit is None or now - hit[0] >= ttl:
+            hit = self._timed[key] = (now, fn())
+        return hit[1]
+
+    def drives(self, include_all: bool = False) -> list[tuple[str, str]]:
+        """Re-scanned every 5 s, so USB drives appear and disappear on their own."""
+        return self.timed(("drives", include_all), 5.0, lambda: list_drives(include_all))
+
+    def gpu_drivers(self) -> list[dict]:
+        return self.timed("gpu_drivers", 60.0, read_gpu_drivers)
 
     # ---- helpers -------------------------------------------------------
     def mem(self):
@@ -609,6 +717,7 @@ class Evaluator:
         self.scale = scale
         self.is_color = is_color  # callable(str) -> bool
         self.fahrenheit = settings.get("temperature_unit", "celsius").strip().lower() in ("fahrenheit", "f")
+        self.drive: tuple = (None, "")  # (root, label) inside ${for_each_drive}
 
     def deg(self, v: float, stype: str) -> float:
         """Sensor value for display: temperatures follow temperature_unit (LHM reports °C).
@@ -636,6 +745,8 @@ class Evaluator:
             return self.st.sensors.ok
         if name == "if_gpu":
             return self.gpu() is not None
+        if name == "if_gpu_driver":
+            return self.gpu_driver() is not None
         if name in ("if_sensor", "if_gpu_sensor"):
             stype, _, q = a.partition(" ")
             if name == "if_gpu_sensor":
@@ -646,6 +757,35 @@ class Evaluator:
 
     def sensor(self, stype: str, query: str) -> dict | None:
         return self.st.sensors.find(stype, query)
+
+    def gpu_driver(self) -> dict | None:
+        """Driver of the GPU the gpu_* variables use (matched by name). Without
+        LibreHardwareMonitor: the "gpu" setting if it's a name, else a dedicated
+        AMD/NVIDIA card first and Microsoft's basic display driver last."""
+        drivers = self.st.gpu_drivers()
+        if not drivers:
+            return None
+        names = []
+        g = self.gpu()
+        if g:
+            names.append(g[1].lower())
+        pref = self.cfg.get("gpu", "auto").strip().lower()
+        if pref and pref != "auto" and not pref.isdigit():
+            names.append(pref)
+        for n in names:
+            for d in drivers:
+                desc = d["DriverDesc"].lower()
+                if desc in n or n in desc:
+                    return d
+
+        def rank(d):
+            who = (d["ProviderName"] + " " + d["DriverDesc"]).lower()
+            if "microsoft" in who:
+                return 3
+            if "intel" in who:
+                return 2  # most often the integrated GPU
+            return 0 if any(v in who for v in ("nvidia", "advanced micro", "amd")) else 1
+        return min(drivers, key=rank)
 
     # ---- device-scoped sensors (any GPU / CPU brand) ----------------------
     def gpu(self) -> tuple[str, str] | None:
@@ -698,7 +838,7 @@ class Evaluator:
             elif name == "swapbar":
                 frac = st.swap().percent / 100
             elif name in ("fs_bar", "fs_bar_free"):
-                d = st.disk(src)
+                d = st.disk(src or self.drive[0])
                 frac = (d.percent / 100) if d else 0
                 if name == "fs_bar_free":
                     frac = 1 - frac
@@ -783,7 +923,7 @@ class Evaluator:
         if name == "swapperc":
             return f"{st.swap().percent:.0f}"
         if name.startswith("fs_"):
-            d = st.disk(a)
+            d = st.disk(a or self.drive[0])
             if d is None:
                 return "N/A"
             return {
@@ -869,6 +1009,17 @@ class Evaluator:
             return f"{self.deg(s['value'], DEVICE_VARS[name][0]):.0f}" if s else "N/A"
         if name == "temp_unit":
             return "°F" if self.fahrenheit else "°C"
+        if name == "drive":
+            return self.drive[0][:2] if self.drive[0] else ""
+        if name == "drive_label":
+            return self.drive[1]
+        if name in ("gpu_driver", "gpu_driver_version", "gpu_driver_date", "gpu_driver_name"):
+            d = self.gpu_driver()
+            if not d:
+                return "N/A"
+            return {"gpu_driver": driver_release, "gpu_driver_date": driver_date,
+                    "gpu_driver_version": lambda x: x["DriverVersion"],
+                    "gpu_driver_name": lambda x: x["DriverDesc"]}[name](d)
         if name == "gpu_name":
             g = self.gpu()
             return g[1] if g else "No GPU found"
@@ -910,7 +1061,36 @@ class Evaluator:
         return None
 
     # ---- whole template -> lines of segments ----------------------------
+    def expand_loops(self, tokens: list[tuple]) -> list[tuple]:
+        """${for_each_drive [all]} BODY ${endfor} -> BODY once per ready drive, each copy
+        preceded by a ("drive", root, label) marker that build() uses as the fs_* default."""
+        out, i = [], 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if not (tok[0] == "var" and tok[1] == "for_each_drive"):
+                out.append(tok)
+                i += 1
+                continue
+            depth, j = 1, i + 1
+            while j < len(tokens):
+                t = tokens[j]
+                if t[0] == "var" and t[1] == "for_each_drive":
+                    depth += 1
+                elif t[0] == "var" and t[1] == "endfor":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            body = self.expand_loops(tokens[i + 1:j])
+            for root, label in self.st.drives(tok[2].strip().lower() == "all"):
+                out.append(("drive", root, label))
+                out.extend(body)
+            out.append(("drive", None, ""))
+            i = j + 1
+        return out
+
     def build(self, tokens: list[tuple]) -> list[list]:
+        tokens = self.expand_loops(tokens)
         cfg = self.cfg
         default_color = norm_color(cfg["default_color"])
         default_font = cfg["font"]
@@ -931,6 +1111,9 @@ class Evaluator:
             if tok[0] == "lit":
                 if active:
                     add_text(tok[1])
+                continue
+            if tok[0] == "drive":
+                self.drive = (tok[1], tok[2])
                 continue
             _, name, args, raw = tok
 

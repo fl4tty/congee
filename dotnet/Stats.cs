@@ -178,6 +178,23 @@ public sealed class Stats
         return (T)v!;
     }
 
+    readonly Dictionary<string, (long at, object? value)> timed = [];
+
+    /// <summary>Like Cached, but keeps the value for ttl seconds (for things that rarely change).</summary>
+    public T Timed<T>(string key, double ttl, Func<T> fn)
+    {
+        long now = Environment.TickCount64;
+        if (!timed.TryGetValue(key, out var hit) || now - hit.at >= ttl * 1000)
+            timed[key] = hit = (now, fn());
+        return (T)hit.value!;
+    }
+
+    /// <summary>Re-scanned every 5 s, so USB drives appear and disappear on their own.</summary>
+    public List<(string root, string label)> Drives(bool includeAll) =>
+        Timed("drives:" + includeAll, 5, () => Hardware.ListDrives(includeAll));
+
+    public List<GpuDriver> GpuDrivers() => Timed("gpu_drivers", 60, Hardware.ReadGpuDrivers);
+
     // ---- memory ------------------------------------------------------------------------
     public (ulong total, ulong avail, ulong used, double percent) Mem() => Cached("mem", () =>
     {

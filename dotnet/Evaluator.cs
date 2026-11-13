@@ -90,6 +90,7 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case "if_battery": return st.Battery() != null;
             case "if_sensors": st.Sensors.Get(); return st.Sensors.Ok;
             case "if_gpu": return Gpu() != null;
+            case "if_gpu_driver": return GpuDriver() != null;
             case "if_sensor" or "if_gpu_sensor":
             {
                 int sp = a.IndexOf(' ');
@@ -137,8 +138,8 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 "cpubar" => st.CpuValue(src) / 100,
                 "membar" => st.Mem().percent / 100,
                 "swapbar" => st.Swap().percent / 100,
-                "fs_bar" => st.Disk(src) is { } d ? 1 - (double)d.AvailableFreeSpace / d.TotalSize : 0,
-                "fs_bar_free" => st.Disk(src) is { } d2 ? (double)d2.AvailableFreeSpace / d2.TotalSize : 0,
+                "fs_bar" => st.Disk(src.Length > 0 ? src : drive.root ?? "") is { } d ? 1 - (double)d.AvailableFreeSpace / d.TotalSize : 0,
+                "fs_bar_free" => st.Disk(src.Length > 0 ? src : drive.root ?? "") is { } d2 ? (double)d2.AvailableFreeSpace / d2.TotalSize : 0,
                 "battery_bar" => (st.Battery()?.percent ?? 0) / 100.0,
                 "tempbar" => (st.Sensors.Find("temperature", src)?.Value ?? 0) / tempMax,
                 "loadbar" or "controlbar" => (st.Sensors.Find(SensorWidgetTypes[name], src)?.Value ?? 0) / 100,
@@ -204,7 +205,7 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case "swapmax": return Config.FmtBytes(st.Swap().total);
             case "swapperc": return F0(st.Swap().percent);
             case "fs_used" or "fs_size" or "fs_free" or "fs_used_perc" or "fs_free_perc":
-                if (st.Disk(a) is not { } d) return "N/A";
+                if (st.Disk(a.Length > 0 ? a : drive.root ?? "") is not { } d) return "N/A";
                 double used = d.TotalSize - d.TotalFreeSpace, pct = 100.0 * used / d.TotalSize;
                 return name switch
                 {
@@ -262,6 +263,17 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case var dvar when DeviceVars.ContainsKey(dvar):
                 return DeviceSensor(dvar, a) is { } ds ? F0(Deg(ds.Value, DeviceVars[dvar].type)) : "N/A";
             case "temp_unit": return fahrenheit ? "°F" : "°C";
+            case "drive": return drive.root is { } root ? root[..2] : "";
+            case "drive_label": return drive.label;
+            case "gpu_driver" or "gpu_driver_version" or "gpu_driver_date" or "gpu_driver_name":
+                if (GpuDriver() is not { } gd) return "N/A";
+                return name switch
+                {
+                    "gpu_driver" => gd.Release,
+                    "gpu_driver_version" => gd.Version,
+                    "gpu_driver_date" => gd.IsoDate,
+                    _ => gd.Desc,
+                };
             case "gpu_name": return Gpu()?.name ?? "No GPU found";
             case "gpu_vram_used" or "gpu_vram_total" or "gpu_vram_perc":
             {
@@ -308,9 +320,70 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
         return null;
     }
 
+    // ---- drives / GPU driver -----------------------------------------------------------------------------
+    (string? root, string label) drive = (null, "");  // inside ${for_each_drive}
+    const string DriveMarker = "\u0001drive";          // Name of the marker token ExpandLoops inserts
+
+    /// <summary>${for_each_drive [all]} BODY ${endfor} -> BODY once per ready drive, each copy preceded
+    /// by a marker token (Text = root, Args = label) that Build uses as the fs_* default.</summary>
+    List<Config.Token> ExpandLoops(List<Config.Token> tokens)
+    {
+        var result = new List<Config.Token>();
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var tok = tokens[i];
+            if (tok.IsLiteral || tok.Name != "for_each_drive") { result.Add(tok); continue; }
+            int depth = 1, j = i + 1;
+            for (; j < tokens.Count; j++)
+            {
+                var t = tokens[j];
+                if (t.IsLiteral) continue;
+                if (t.Name == "for_each_drive") depth++;
+                else if (t.Name == "endfor" && --depth == 0) break;
+            }
+            var body = ExpandLoops(tokens.GetRange(i + 1, Math.Min(j, tokens.Count) - i - 1));
+            foreach (var (root, label) in st.Drives(tok.Args.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)))
+            {
+                result.Add(new Config.Token(false, root, DriveMarker, label));
+                result.AddRange(body);
+            }
+            result.Add(new Config.Token(false, "", DriveMarker, ""));
+            i = j;
+        }
+        return result;
+    }
+
+    /// <summary>Driver of the GPU the gpu_* variables use (matched by name). Without
+    /// LibreHardwareMonitor: the "gpu" setting if it's a name, else a dedicated AMD/NVIDIA
+    /// card first and Microsoft's basic display driver last.</summary>
+    GpuDriver? GpuDriver() => st.Cached("gpu_driver", () =>
+    {
+        var drivers = st.GpuDrivers();
+        if (drivers.Count == 0) return null;
+        var names = new List<string>();
+        if (Gpu() is { } g) names.Add(g.name.ToLowerInvariant());
+        string pref = cfg.GetValueOrDefault("gpu", "auto").Trim().ToLowerInvariant();
+        if (pref.Length > 0 && pref != "auto" && !pref.All(char.IsAsciiDigit)) names.Add(pref);
+        foreach (var n in names)
+            foreach (var d in drivers)
+            {
+                string desc = d.Desc.ToLowerInvariant();
+                if (n.Contains(desc) || desc.Contains(n)) return d;
+            }
+        static int Rank(GpuDriver d)
+        {
+            string who = (d.Provider + " " + d.Desc).ToLowerInvariant();
+            if (who.Contains("microsoft")) return 3;
+            if (who.Contains("intel")) return 2;  // most often the integrated GPU
+            return who.Contains("nvidia") || who.Contains("advanced micro") || who.Contains("amd") ? 0 : 1;
+        }
+        return drivers.OrderBy(Rank).First();
+    });
+
     // ---- whole template -> lines of segments ------------------------------------------------------------
     public List<List<Seg>> Build(List<Config.Token> tokens)
     {
+        tokens = ExpandLoops(tokens);
         string defaultColor = Config.NormColor(cfg["default_color"]);
         string defaultFont = cfg["font"];
         bool upper = Config.Yes(cfg["uppercase"]);
@@ -333,6 +406,7 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
         foreach (var tok in tokens)
         {
             if (tok.IsLiteral) { if (active) AddText(tok.Text); continue; }
+            if (tok.Name == DriveMarker) { drive = (tok.Text.Length > 0 ? tok.Text : null, tok.Args); continue; }
             string name = tok.Name, args = tok.Args;
 
             if (name.StartsWith("if_"))
