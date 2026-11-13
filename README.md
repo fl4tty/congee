@@ -234,6 +234,7 @@ CPU ${cpu}% ${cpubar}
 | Keep it above other windows | `own_window_type override` |
 | Let clicks pass through it | `click_through yes` (the right-click menu then only works from the tray icon) |
 | Update less often | `update_interval 2` |
+| Show temperatures in Fahrenheit | `temperature_unit fahrenheit` (write `${temp_unit}` after a temperature to get °F/°C to match) |
 | Right-align part of a line | `Label${alignr}value` |
 | Line things up in columns | `Name${goto 170}Value` |
 | Show something only sometimes | `${if_running Discord}Discord is open${endif}` |
@@ -301,7 +302,8 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `dpi_scale` | auto | Scales pixel values (gaps, sizes, goto) to the display DPI. Set `1` for raw pixels |
 | `gpu` | auto | Which GPU the `gpu_*` variables read; see [above](#temperatures-fans-and-gpu-stats) |
 | `sensors_url` | `http://localhost:8085/data.json` | Where LibreHardwareMonitor's web server is |
-| `temp_bar_max` | 100 | Degrees that fill a temperature bar or graph |
+| `temp_bar_max` | 100 | °C that fill a temperature bar or graph (always °C, whatever `temperature_unit` says) |
+| `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
 
 ## Variables
 
@@ -310,20 +312,20 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | Category | Variables |
 |---|---|
 | CPU | `cpu [cpuN]` (%; cpu0 = total, cpu1 = first core), `cpubar [cpuN] [h,w]`, `cpugraph [cpuN] [h,w] [c1 c2]`, `freq` (MHz), `freq_g` (GHz), `cpu_name`, `cpu_cores`, `cpu_threads` |
-| CPU sensors, AMD or Intel ¹ | `cpu_temp` (°C), `cpu_power` (W), `cpu_tempbar`, `cpu_tempgraph` |
-| GPU, any brand ¹ | `gpu_name`, `gpu_temp`, `gpu_hotspot`, `gpu_memtemp` (°C), `gpu_load` (%), `gpu_clock`, `gpu_memclock` (MHz), `gpu_power` (W), `gpu_fan` (RPM), `gpu_fan_perc`, `gpu_vram_used`, `gpu_vram_total`, `gpu_vram_perc`, `gpu_sensor TYPE NAME`, `gpu_loadbar`, `gpu_loadgraph`, `gpu_tempbar [h,w] [NAME]`, `gpu_tempgraph`, `gpu_fangraph`, `gpu_vrambar` |
-| Any sensor ¹ | `temp NAME` (°C), `fan NAME` (RPM), `sensor TYPE NAME` (types: `temperature`, `fan`, `load`, `clock`, `power`, `voltage`, `current`, `control`, `data`, `smalldata`, `throughput`, `level`…), `tempbar [h,w] NAME`, `tempgraph [h,w] NAME [c1 c2]`, `fangraph`, `loadbar`, `loadgraph`, `controlbar` |
+| CPU sensors, AMD or Intel ¹ | `cpu_temp`, `cpu_power` (W), `cpu_tempbar`, `cpu_tempgraph` |
+| GPU, any brand ¹ | `gpu_name`, `gpu_temp`, `gpu_hotspot`, `gpu_memtemp`, `gpu_load` (%), `gpu_clock`, `gpu_memclock` (MHz), `gpu_power` (W), `gpu_fan` (RPM), `gpu_fan_perc`, `gpu_vram_used`, `gpu_vram_total`, `gpu_vram_perc`, `gpu_sensor TYPE NAME`, `gpu_loadbar`, `gpu_loadgraph`, `gpu_tempbar [h,w] [NAME]`, `gpu_tempgraph`, `gpu_fangraph`, `gpu_vrambar` |
+| Any sensor ¹ | `temp NAME`, `fan NAME` (RPM), `sensor TYPE NAME` (types: `temperature`, `fan`, `load`, `clock`, `power`, `voltage`, `current`, `control`, `data`, `smalldata`, `throughput`, `level`…), `tempbar [h,w] NAME`, `tempgraph [h,w] NAME [c1 c2]`, `fangraph`, `loadbar`, `loadgraph`, `controlbar` |
 | Memory | `mem`, `memmax`, `memfree`, `memperc`, `membar`, `memgraph`, `swap`, `swapmax`, `swapperc`, `swapbar` |
 | Disk | `fs_used`, `fs_size`, `fs_free`, `fs_used_perc`, `fs_free_perc` (all take an optional path; default `C:\`), `fs_bar [h,w] [path]`, `fs_bar_free`, `diskio`, `diskio_read`, `diskio_write`, `diskiograph` |
 | Network | `downspeed`, `upspeed`, `downspeedf`, `upspeedf` (KiB), `totaldown`, `totalup`, `downspeedgraph`, `upspeedgraph` (all take an optional interface name; without one, all adapters are summed), `addr [iface]` |
 | Processes | `processes`, `top name/cpu/mem/mem_res/pid N` (Nth by CPU), `top_mem name/cpu/mem/mem_res/pid N` (Nth by memory) |
-| System | `time [strftime format]`, `utime` (UTC), `uptime`, `uptime_short`, `nodename`, `user_names`, `sysname`, `os`, `kernel`, `machine` |
+| System | `temp_unit` (°C or °F, following `temperature_unit`), `time [strftime format]`, `utime` (UTC), `uptime`, `uptime_short`, `nodename`, `user_names`, `sysname`, `os`, `kernel`, `machine` |
 | Battery | `battery_percent`, `battery_status`, `battery_time`, `battery_bar` |
 | Commands | `exec command` (every update), `execi seconds command`. Run in the background through `cmd.exe` |
 | Layout | `color [c]`, `color0`–`color9`, `font [spec]`, `alignr`, `alignc`, `goto X`, `offset X`, `hr [h]`, `stippled_hr [h]` |
 | Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested |
 
-¹ Needs LibreHardwareMonitor running; otherwise shows `N/A`.
+¹ Needs LibreHardwareMonitor running; otherwise shows `N/A`. Temperatures are in °C, or °F with `temperature_unit fahrenheit`.
 
 ## Troubleshooting
 

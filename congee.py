@@ -79,7 +79,8 @@ DEFAULTS = {
     "uppercase": "no",
     "dpi_scale": "auto",  # auto, or a number like 1.0 / 1.5
     "sensors_url": "http://localhost:8085/data.json",  # LibreHardwareMonitor web server
-    "temp_bar_max": "100",  # degrees that count as a full tempbar/tempgraph
+    "temp_bar_max": "100",  # °C that count as a full tempbar/tempgraph
+    "temperature_unit": "celsius",  # or fahrenheit: how temperature values are shown
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
 }
 
@@ -607,6 +608,12 @@ class Evaluator:
         self.cfg = settings
         self.scale = scale
         self.is_color = is_color  # callable(str) -> bool
+        self.fahrenheit = settings.get("temperature_unit", "celsius").strip().lower() in ("fahrenheit", "f")
+
+    def deg(self, v: float, stype: str) -> float:
+        """Sensor value for display: temperatures follow temperature_unit (LHM reports °C).
+        Bars and graphs keep using °C, so temp_bar_max stays in °C."""
+        return v * 9 / 5 + 32 if self.fahrenheit and stype == "temperature" else v
 
     def px(self, v) -> int:
         return int(round(float(v) * self.scale))
@@ -859,7 +866,9 @@ class Evaluator:
             }.get(field, lambda: "?")()
         if name in DEVICE_VARS:
             s = self.device_sensor(name, a)
-            return f"{s['value']:.0f}" if s else "N/A"
+            return f"{self.deg(s['value'], DEVICE_VARS[name][0]):.0f}" if s else "N/A"
+        if name == "temp_unit":
+            return "°F" if self.fahrenheit else "°C"
         if name == "gpu_name":
             g = self.gpu()
             return g[1] if g else "No GPU found"
@@ -878,17 +887,17 @@ class Evaluator:
             s = st.sensors.find(stype.lower(), q, g[0]) if g else None
             if not s:
                 return "N/A"
-            v = s["value"]
+            v = self.deg(s["value"], stype.lower())
             return f"{v:.0f}" if abs(v) >= 100 or v == int(v) else f"{v:.1f}"
         if name in ("temp", "fan"):
             s = self.sensor("temperature" if name == "temp" else "fan", a)
-            return f"{s['value']:.0f}" if s else "N/A"
+            return f"{self.deg(s['value'], 'temperature' if name == 'temp' else 'fan'):.0f}" if s else "N/A"
         if name == "sensor":
             stype, _, q = a.partition(" ")
             s = self.sensor(stype.lower(), q)
             if not s:
                 return "N/A"
-            v = s["value"]
+            v = self.deg(s["value"], stype.lower())
             return f"{v:.0f}" if abs(v) >= 100 or v == int(v) else f"{v:.1f}"
         if name == "exec":
             return st.run_exec(args, float(self.cfg["update_interval"]))

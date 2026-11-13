@@ -48,6 +48,12 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
         ["gpu_fangraph"] = "gpu_fan", ["cpu_tempbar"] = "cpu_temp", ["cpu_tempgraph"] = "cpu_temp",
     };
 
+    readonly bool fahrenheit = cfg.GetValueOrDefault("temperature_unit", "celsius").Trim().ToLowerInvariant() is "fahrenheit" or "f";
+
+    /// <summary>Sensor value for display: temperatures follow temperature_unit (LHM reports °C).
+    /// Bars and graphs keep using °C, so temp_bar_max stays in °C.</summary>
+    double Deg(double v, string type) => fahrenheit && type == "temperature" ? v * 9 / 5 + 32 : v;
+
     (string id, string name)? Gpu() => st.Cached("gpu", () => st.Sensors.SelectGpu(cfg.GetValueOrDefault("gpu", "auto")));
 
     string? CpuHw() => st.Cached("cpu_hw", () =>
@@ -254,7 +260,8 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 };
             }
             case var dvar when DeviceVars.ContainsKey(dvar):
-                return DeviceSensor(dvar, a) is { } ds ? F0(ds.Value) : "N/A";
+                return DeviceSensor(dvar, a) is { } ds ? F0(Deg(ds.Value, DeviceVars[dvar].type)) : "N/A";
+            case "temp_unit": return fahrenheit ? "°F" : "°C";
             case "gpu_name": return Gpu()?.name ?? "No GPU found";
             case "gpu_vram_used" or "gpu_vram_total" or "gpu_vram_perc":
             {
@@ -273,19 +280,19 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 int sp = a.IndexOf(' ');
                 string type = (sp < 0 ? a : a[..sp]).ToLowerInvariant(), q = sp < 0 ? "" : a[(sp + 1)..];
                 if (Gpu() is not { } g || st.Sensors.Find(type, q, g.id) is not { } gs) return "N/A";
-                double v = gs.Value;
+                double v = Deg(gs.Value, type);
                 return Math.Abs(v) >= 100 || v == Math.Floor(v) ? F0(v) : v.ToString("0.0");
             }
             case "temp" or "fan":
                 var s = st.Sensors.Find(name == "temp" ? "temperature" : "fan", a);
-                return s is null ? "N/A" : F0(s.Value);
+                return s is null ? "N/A" : F0(Deg(s.Value, s.Type));
             case "sensor":
             {
                 int sp = a.IndexOf(' ');
                 string type = (sp < 0 ? a : a[..sp]).ToLowerInvariant(), q = sp < 0 ? "" : a[(sp + 1)..];
                 var sv = st.Sensors.Find(type, q);
                 if (sv is null) return "N/A";
-                double v = sv.Value;
+                double v = Deg(sv.Value, type);
                 return Math.Abs(v) >= 100 || v == Math.Floor(v) ? F0(v) : v.ToString("0.0");
             }
             case "exec": return st.RunExec(args, Config.Num(cfg, "update_interval"));

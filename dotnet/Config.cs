@@ -34,7 +34,8 @@ public static class Config
         ["uppercase"] = "no",
         ["dpi_scale"] = "auto",
         ["sensors_url"] = "http://localhost:8085/data.json",
-        ["temp_bar_max"] = "100",
+        ["temp_bar_max"] = "100",          // °C that count as a full tempbar/tempgraph
+        ["temperature_unit"] = "celsius",  // or fahrenheit: how temperature values are shown
         ["gpu"] = "auto",
     };
 
