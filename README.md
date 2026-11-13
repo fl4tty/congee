@@ -71,6 +71,10 @@ choose *More info* → *Run anyway*.
    Untick anything you'd rather install yourself. Setup warns you if you leave a required item unticked.
 4. Setup copies the files and builds the Python environment (`.venv` with psutil) if you picked the Python edition.
    It also puts a starter config in `%APPDATA%\congee\congee.conf`, but only if you don't already have one.
+   When you upgrade, setup adds the new version's features to your existing config, such as the drive list and
+   the GPU driver line. It only changes lines that still match an older default config, so your own changes stay,
+   and it saves your old config as `congee.conf.bak` first. To run this yourself:
+   `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\congee\upgrade-config.ps1"`.
 5. On the last page you can start congee, and start LibreHardwareMonitor (that one asks for admin).
 
 The Start menu gets *congee*, *Edit congee config*, the README and *Uninstall congee*. Uninstalling stops any
@@ -363,6 +367,7 @@ congee\
 │   ├── congee.iss         Installer script: editions, dependency page, shortcuts
 │   ├── build.ps1          Builds installer\Output\congee-setup-<version>.exe
 │   ├── stop-congee.ps1    Closes running copies before upgrade/uninstall
+│   ├── upgrade-config.ps1 Adds new features to an existing config on upgrade (saves a .bak)
 │   └── Output\            Built installer (not in git)
 ├── tools\make_icon.ps1 Draws congee.ico
 ├── LICENSE            GPL-3.0

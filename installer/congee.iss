@@ -62,6 +62,7 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\congee.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-congee.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-congee.ps1"; Flags: dontcopy
+Source: "upgrade-config.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; The user's own config: created once, never overwritten or removed
 Source: "..\congee.conf"; DestDir: "{userappdata}\congee"; Flags: onlyifdoesntexist uninsneveruninstall
 
@@ -381,6 +382,17 @@ begin
   Result := '';
 end;
 
+{ Adds features from newer versions to an existing config (only where it still has the old
+  default lines), saving the old file as congee.conf.bak first. See upgrade-config.ps1. }
+procedure UpgradeUserConfig();
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+       ExpandConstant('-NoProfile -ExecutionPolicy Bypass -File "{app}\upgrade-config.ps1" -Config "{userappdata}\congee\congee.conf"'),
+       '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
@@ -391,6 +403,7 @@ begin
   end;
   if CurStep = ssPostInstall then
   begin
+    UpgradeUserConfig();
     if WizardIsComponentSelected('python') then SetupPythonVenv();
     ConfigureLhm();
   end;
