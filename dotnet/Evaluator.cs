@@ -91,7 +91,6 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case "if_sensors": st.Sensors.Get(); return st.Sensors.Ok;
             case "if_gpu": return Gpu() != null;
             case "if_gpu_driver": return GpuDriver() != null;
-            case "if_drive_ready": return drive?.Ready == true;
             case "if_sensor" or "if_gpu_sensor":
             {
                 int sp = a.IndexOf(' ');
@@ -216,9 +215,13 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                     "fs_used_perc" => F0(pct),
                     _ => F0(100 - pct),
                 };
-            case "diskio": return Config.FmtBytes(st.DiskRate.read + st.DiskRate.write);
-            case "diskio_read": return Config.FmtBytes(st.DiskRate.read);
-            case "diskio_write": return Config.FmtBytes(st.DiskRate.write);
+            case "diskio" or "diskio_read" or "diskio_write":
+            {
+                string target = a.Length > 0 ? a : drive?.Root ?? "";  // a drive given, or the loop's drive; else all disks
+                (double read, double write)? rate = target.Length > 0 ? st.DiskIo(target) : st.DiskRate;
+                if (rate is not { } io) return "N/A";
+                return Config.FmtBytes(name switch { "diskio" => io.read + io.write, "diskio_read" => io.read, _ => io.write });
+            }
             case "downspeed": return Config.FmtBytes(st.Net(a).down);
             case "upspeed": return Config.FmtBytes(st.Net(a).up);
             case "downspeedf": return (st.Net(a).down / 1024).ToString("0.0");

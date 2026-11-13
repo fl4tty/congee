@@ -137,6 +137,7 @@ public sealed class Stats
 
         SampleNet(dt);
         try { DiskRate = (diskRead?.NextValue() ?? 0, diskWrite?.NextValue() ?? 0); } catch { DiskRate = (0, 0); }
+        SampleDriveIo();
     }
 
     // .NET also lists the hidden filter layers Windows stacks on each adapter
@@ -193,6 +194,53 @@ public sealed class Stats
 
     /// <summary>Waits for the first background drive scan (network/DVD drives); for --once.</summary>
     public void WaitForDrives(TimeSpan timeout) => driveScanner.Wait(timeout);
+
+    // ---- per-drive read/write: LogicalDisk(C:) for local, USB and DVD drives, SMB Client
+    // Shares(\server\share) for mapped SMB drives. NFS/WebDAV drives have no such counter.
+    readonly Dictionary<string, (PerformanceCounter read, PerformanceCounter write)?> driveIo = [];
+    readonly Dictionary<string, (double read, double write)?> driveIoRate = [];
+
+    /// <summary>(read, write) bytes/s of one drive ("D:" or "D:\"), or null if Windows can't tell.
+    /// A drive's counters are created the first time it's asked for and read once per tick.</summary>
+    public (double read, double write)? DiskIo(string path)
+    {
+        if (path.Length < 2 || path[1] != ':') return null;
+        string root = char.ToUpperInvariant(path[0]) + ":\\";
+        var entry = Drives().FirstOrDefault(d => d.Root == root);
+        string share = "";
+        if ((entry?.Kind ?? Hardware.DriveKind(root)) == "network")
+        {
+            share = entry is { } e && e.Label.StartsWith(@"\\") ? e.Label : Hardware.NetworkPath(root[..2]).unc;
+            if (share.Length == 0) return null;
+        }
+        string key = root + "|" + share;
+        if (!driveIo.ContainsKey(key))
+        {
+            try
+            {
+                var (cat, inst, readName, writeName) = share.Length > 0
+                    ? ("SMB Client Shares", share[1..], "Read Bytes/sec", "Write Bytes/sec")
+                    : ("LogicalDisk", root[..2], "Disk Read Bytes/sec", "Disk Write Bytes/sec");
+                var r = new PerformanceCounter(cat, readName, inst, readOnly: true);
+                var w = new PerformanceCounter(cat, writeName, inst, readOnly: true);
+                r.NextValue(); w.NextValue();  // first sample; rates come from the next one
+                driveIo[key] = (r, w);
+                driveIoRate[key] = (0, 0);
+            }
+            catch { driveIo[key] = null; driveIoRate[key] = null; }
+        }
+        return driveIoRate.GetValueOrDefault(key);
+    }
+
+    void SampleDriveIo()
+    {
+        foreach (var (key, c) in driveIo)
+        {
+            if (c is not { } pc) continue;
+            try { driveIoRate[key] = (pc.read.NextValue(), pc.write.NextValue()); }
+            catch { driveIoRate[key] = null; }  // instance gone, e.g. the share was disconnected
+        }
+    }
 
     /// <summary>All drive letters (see Hardware.ScanDrives); USB sticks and mapped drives come and go on their own.</summary>
     public List<DriveEntry> Drives() => driveScanner.Get();

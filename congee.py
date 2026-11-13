@@ -448,14 +448,14 @@ def network_path(letter_colon: str) -> tuple[str, bool]:
 
 
 def scan_drives(slow: bool = True) -> list[dict]:
-    """Every drive letter Explorer would show, as dicts with root ("C:\\"), kind (local,
-    removable, network, optical, ram), label and ready. Network drives are listed even
-    when disconnected (Explorer shows them with a red X); empty card readers and optical
-    drives without a disc are skipped, as Explorer hides empty drives. The same local
+    r"""Every usable drive letter, as dicts with root ("C:\"), kind (local, removable,
+    network, optical, ram) and label (for mapped drives the \\server\share path). Mapped
+    drives that are disconnected or unreachable, empty card readers and optical drives
+    without a disc are left out. The same local
     volume under a second letter (subst, extra mount point) is listed once.
     slow=False skips network/optical drives entirely: they can take seconds to answer."""
     if not IS_WINDOWS:
-        return [{"root": p.mountpoint, "kind": "local", "label": "", "ready": True} for p in psutil.disk_partitions()]
+        return [{"root": p.mountpoint, "kind": "local", "label": ""} for p in psutil.disk_partitions()]
     k32 = ctypes.windll.kernel32
     mask = k32.GetLogicalDrives()
     out, seen = [], set()
@@ -471,9 +471,9 @@ def scan_drives(slow: bool = True) -> list[dict]:
             label, serial = ctypes.create_unicode_buffer(261), wt.DWORD()
             if kind == "network":
                 unc, connected = network_path(root[:2])
-                ready = connected and bool(k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0))
-                out.append({"root": root, "kind": kind, "label": unc or label.value, "ready": ready})
-                continue
+                if connected and k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0):
+                    out.append({"root": root, "kind": kind, "label": unc or label.value})
+                continue  # disconnected or unreachable: not shown
             ready = bool(k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0))
             if not ready:
                 continue
@@ -481,10 +481,73 @@ def scan_drives(slow: bool = True) -> list[dict]:
                 if serial.value in seen:
                     continue
                 seen.add(serial.value)
-            out.append({"root": root, "kind": kind, "label": label.value, "ready": True})
+            out.append({"root": root, "kind": kind, "label": label.value})
     finally:
         k32.SetErrorMode(old_mode)
     return out
+
+
+class DriveIO:
+    r"""Read/write bytes per second per drive letter, from Windows' performance counters:
+    LogicalDisk(C:) for local, USB and DVD drives and SMB Client Shares(\server\share) for
+    mapped SMB drives. NFS and WebDAV drives have no such counter (rate() gives None).
+    A drive's counters are added the first time it's asked for; all are read once per tick."""
+    NO_INSTANCE = 0x800007D1  # PDH_CSTATUS_NO_INSTANCE
+
+    class _Value(ctypes.Structure):  # PDH_FMT_COUNTERVALUE with PDH_FMT_DOUBLE
+        _fields_ = [("status", wt.DWORD), ("pad", wt.DWORD), ("value", ctypes.c_double)]
+
+    def __init__(self):
+        self.pdh = None
+        self.query = wt.HANDLE()
+        if IS_WINDOWS:
+            try:
+                pdh = ctypes.windll.pdh
+                if pdh.PdhOpenQueryW(None, 0, ctypes.byref(self.query)) == 0:
+                    self.pdh = pdh
+            except OSError:
+                pass
+        self.counters: dict[tuple, tuple | None] = {}  # (root, share) -> (read, write) counter handles
+        self.rates: dict[tuple, tuple[float, float] | None] = {}
+
+    def _add(self, path: str):
+        h = wt.HANDLE()
+        return h if self.pdh.PdhAddEnglishCounterW(self.query, path, 0, ctypes.byref(h)) == 0 else None
+
+    def rate(self, root: str, share: str = "") -> tuple[float, float] | None:
+        r"""(read, write) bytes/s for a drive root ("C:\"); share is the \\server\share of a mapped drive."""
+        if self.pdh is None:
+            return None
+        key = (root, share)
+        if key not in self.counters:
+            if share:
+                obj, inst, names = "SMB Client Shares", share[1:], ("Read Bytes/sec", "Write Bytes/sec")
+            else:
+                obj, inst, names = "LogicalDisk", root[:2], ("Disk Read Bytes/sec", "Disk Write Bytes/sec")
+            r, w = (self._add(f"\\{obj}({inst})\\{n}") for n in names)
+            self.counters[key] = (r, w) if r and w else None
+            self.rates[key] = (0.0, 0.0) if r and w else None  # real values from the next tick on
+            # Rates need two samples. Take the first now; PDH divides by the real time between
+            # samples, so this extra one doesn't skew the other drives' numbers.
+            self.pdh.PdhCollectQueryData(self.query)
+        return self.rates.get(key)
+
+    def collect(self):
+        if self.pdh is None or not self.counters:
+            return
+        self.pdh.PdhCollectQueryData(self.query)
+        for key, handles in self.counters.items():
+            if handles is None:
+                continue
+            vals = []
+            for h in handles:
+                v = self._Value()
+                rc = self.pdh.PdhGetFormattedCounterValue(h, 0x200, None, ctypes.byref(v))  # PDH_FMT_DOUBLE
+                if v.status == self.NO_INSTANCE:  # e.g. an NFS/WebDAV drive, or a share that went away
+                    vals = None
+                    break
+                vals.append(v.value if rc == 0 else 0.0)
+            self.rates[key] = tuple(vals) if vals else None
 
 
 class DriveScanner:
@@ -517,7 +580,7 @@ class DriveScanner:
             drives = scan_drives(slow=True)
             usage = {}
             for d in drives:
-                if d["kind"] not in LOCAL_KINDS and d["ready"]:
+                if d["kind"] not in LOCAL_KINDS:
                     try:
                         usage[d["root"]] = psutil.disk_usage(d["root"])
                     except OSError:
@@ -614,6 +677,7 @@ class Stats:
         self._cache: dict = {}
         self._timed: dict = {}
         self.drive_scanner = DriveScanner()
+        self.drive_io = DriveIO()
 
     def sample(self):
         now = time.monotonic()
@@ -641,6 +705,7 @@ class Stats:
             self.disk_rate = (max(d.read_bytes - self.disk_prev.read_bytes, 0) / dt,
                               max(d.write_bytes - self.disk_prev.write_bytes, 0) / dt)
         self.disk_prev = d
+        self.drive_io.collect()
 
     def cached(self, key, fn):
         if key not in self._cache:
@@ -654,6 +719,20 @@ class Stats:
         if hit is None or now - hit[0] >= ttl:
             hit = self._timed[key] = (now, fn())
         return hit[1]
+
+    def disk_io(self, path: str) -> tuple[float, float] | None:
+        """(read, write) bytes/s of one drive ("D:" or "D:\\"), or None if Windows can't tell."""
+        if not IS_WINDOWS or len(path) < 2 or path[1] != ":":
+            return None
+        root = path[:2].upper() + "\\"
+        entry = next((d for d in self.drives() if d["root"] == root), None)
+        kind = entry["kind"] if entry else DRIVE_KINDS.get(ctypes.windll.kernel32.GetDriveTypeW(root))
+        share = ""
+        if kind == "network":
+            share = entry["label"] if entry and entry["label"].startswith("\\\\") else network_path(root[:2])[0]
+            if not share:
+                return None
+        return self.drive_io.rate(root, share)
 
     def drives(self) -> list[dict]:
         """All drive letters (see scan_drives); USB sticks and mapped drives come and go on their own."""
@@ -821,8 +900,6 @@ class Evaluator:
             return self.gpu() is not None
         if name == "if_gpu_driver":
             return self.gpu_driver() is not None
-        if name == "if_drive_ready":
-            return bool(self.drive and self.drive["ready"])
         if name in ("if_sensor", "if_gpu_sensor"):
             stype, _, q = a.partition(" ")
             if name == "if_gpu_sensor":
@@ -1012,12 +1089,12 @@ class Evaluator:
                 "fs_used_perc": lambda: f"{d.percent:.0f}",
                 "fs_free_perc": lambda: f"{100 - d.percent:.0f}",
             }.get(name, lambda: None)()
-        if name == "diskio":
-            return fmt_bytes(sum(st.disk_rate))
-        if name == "diskio_read":
-            return fmt_bytes(st.disk_rate[0])
-        if name == "diskio_write":
-            return fmt_bytes(st.disk_rate[1])
+        if name in ("diskio", "diskio_read", "diskio_write"):
+            target = a or self.drive_root()  # a drive given, or the loop's drive; else all disks
+            rate = st.disk_io(target) if target else st.disk_rate
+            if rate is None:
+                return "N/A"
+            return fmt_bytes({"diskio": sum(rate), "diskio_read": rate[0], "diskio_write": rate[1]}[name])
         if name == "downspeed":
             return fmt_bytes(st.net(a)[0])
         if name == "upspeed":

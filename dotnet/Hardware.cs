@@ -42,8 +42,8 @@ public sealed record GpuDriver(string Desc, string Provider, string Version, str
 }
 
 /// <summary>A drive letter: root ("C:\\"), kind (local, removable, network, optical, ram), volume
-/// label (for mapped drives the \\server\share path) and whether it's reachable right now.</summary>
-public sealed record DriveEntry(string Root, string Kind, string Label, bool Ready);
+/// label (for mapped drives the \\server\share path).</summary>
+public sealed record DriveEntry(string Root, string Kind, string Label);
 
 public sealed record DiskUsage(long Total, long Free, long Avail);
 
@@ -79,7 +79,7 @@ public sealed class DriveScanner
             var found = Hardware.ScanDrives(slow: true);
             var sizes = new Dictionary<string, DiskUsage>(StringComparer.OrdinalIgnoreCase);
             foreach (var d in found)
-                if (!Hardware.IsLocalKind(d.Kind) && d.Ready && Hardware.Usage(d.Root) is { } u)
+                if (!Hardware.IsLocalKind(d.Kind) && Hardware.Usage(d.Root) is { } u)
                     sizes[d.Root] = u;
             usage = sizes;
             drives = found;
@@ -119,7 +119,7 @@ public static class Hardware
     /// <summary>(\\server\share, connected) for a mapped drive (SMB, NFS, WebDAV...). Windows also
     /// lists remembered mappings that aren't connected right now; asking those for volume info
     /// only times out after ~10 s, so ScanDrives skips that for them.</summary>
-    static (string unc, bool connected) NetworkPath(string letterColon)
+    public static (string unc, bool connected) NetworkPath(string letterColon)
     {
         var buf = new StringBuilder(1024);
         int len = buf.Capacity;
@@ -128,9 +128,8 @@ public static class Hardware
         return (rc == 0 ? buf.ToString() : "", true);
     }
 
-    /// <summary>Every drive letter Explorer would show. Network drives are listed even when
-    /// disconnected (Explorer shows them with a red X); empty card readers and optical drives
-    /// without a disc are skipped, as Explorer hides empty drives. The same local volume under a
+    /// <summary>Every usable drive letter. Mapped drives that are disconnected or unreachable,
+    /// empty card readers and optical drives without a disc are left out. The same local volume under a
     /// second letter (subst, extra mount point) is listed once. slow=false leaves out network and
     /// optical drives entirely: they can take seconds to answer.</summary>
     public static List<DriveEntry> ScanDrives(bool slow)
@@ -151,14 +150,14 @@ public static class Hardware
                 if (kind == "network")
                 {
                     var (unc, connected) = NetworkPath(root[..2]);
-                    bool up = connected && GetVolumeInformation(root, label, label.Capacity, out serial, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0);
-                    result.Add(new DriveEntry(root, kind, unc.Length > 0 ? unc : label.ToString(), up));
-                    continue;
+                    if (connected && GetVolumeInformation(root, label, label.Capacity, out serial, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0))
+                        result.Add(new DriveEntry(root, kind, unc.Length > 0 ? unc : label.ToString()));
+                    continue;  // disconnected or unreachable: not shown
                 }
                 if (!GetVolumeInformation(root, label, label.Capacity, out serial, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0))
                     continue;  // not ready
                 if (IsLocalKind(kind) && serial != 0 && !seen.Add(serial)) continue;
-                result.Add(new DriveEntry(root, kind, label.ToString(), true));
+                result.Add(new DriveEntry(root, kind, label.ToString()));
             }
         }
         finally { SetErrorMode(oldMode); }
