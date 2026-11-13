@@ -41,12 +41,12 @@ function Draw([int]$s) {
     $g.FillEllipse($pg, [float]($cx - $prx), [float]($cy - $pry), [float](2 * $prx), [float](2 * $pry))
     $g.DrawEllipse((New-Object System.Drawing.Pen (C '8fc0f2'), ([math]::Max(1, $s * 0.025))), [float]($cx - $rx), [float]($cy - $ry), [float](2 * $rx), [float](2 * $ry))
 
-    # sweet toppings (red beans / goji) at larger sizes
+    # toppings (light brown / tan, e.g. peanuts or fried shallots) at larger sizes
     if ($s -ge 32) {
-        $red = New-Object System.Drawing.SolidBrush (C 'c8423b'); $d = 0.055 * $s
-        foreach ($t in @(@(0.36, 0.46), @(0.44, 0.50), @(0.31, 0.50))) { $g.FillEllipse($red, [float]($t[0] * $s - $d / 2), [float]($t[1] * $s - $d / 2), [float]$d, [float]$d) }
-        $grn = New-Object System.Drawing.SolidBrush (C '7cb342')
-        $g.FillEllipse($grn, [float](0.40 * $s - $d / 2), [float](0.445 * $s - $d / 2), [float]$d, [float]$d)
+        $tan = New-Object System.Drawing.SolidBrush (C 'c4986a'); $d = 0.055 * $s
+        foreach ($t in @(@(0.36, 0.46), @(0.44, 0.50), @(0.31, 0.50))) { $g.FillEllipse($tan, [float]($t[0] * $s - $d / 2), [float]($t[1] * $s - $d / 2), [float]$d, [float]$d) }
+        $tan2 = New-Object System.Drawing.SolidBrush (C 'a97b4f')
+        $g.FillEllipse($tan2, [float](0.40 * $s - $d / 2), [float](0.445 * $s - $d / 2), [float]$d, [float]$d)
     }
 
     # spoon: bowl of the spoon in the porridge, handle out over the rim
