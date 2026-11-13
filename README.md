@@ -235,7 +235,7 @@ CPU ${cpu}% ${cpubar}
 | Let clicks pass through it | `click_through yes` (the right-click menu then only works from the tray icon) |
 | Update less often | `update_interval 2` |
 | Show only some drives | Replace the `${for_each_drive}` block with one line per drive, e.g. `${fs_used D:\}` and `${fs_bar 6,0 D:\}` |
-| Also show network and DVD drives | `${for_each_drive all}` |
+| Leave out mapped network drives and DVD drives | `${for_each_drive local}` |
 | Show temperatures in Fahrenheit | `temperature_unit fahrenheit` (write `${temp_unit}` after a temperature to get °F/°C to match) |
 | Right-align part of a line | `Label${alignr}value` |
 | Line things up in columns | `Name${goto 170}Value` |
@@ -319,14 +319,14 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | GPU, any brand ¹ | `gpu_name`, `gpu_temp`, `gpu_hotspot`, `gpu_memtemp`, `gpu_load` (%), `gpu_clock`, `gpu_memclock` (MHz), `gpu_power` (W), `gpu_fan` (RPM), `gpu_fan_perc`, `gpu_vram_used`, `gpu_vram_total`, `gpu_vram_perc`, `gpu_sensor TYPE NAME`, `gpu_loadbar`, `gpu_loadgraph`, `gpu_tempbar [h,w] [NAME]`, `gpu_tempgraph`, `gpu_fangraph`, `gpu_vrambar` |
 | Any sensor ¹ | `temp NAME`, `fan NAME` (RPM), `sensor TYPE NAME` (types: `temperature`, `fan`, `load`, `clock`, `power`, `voltage`, `current`, `control`, `data`, `smalldata`, `throughput`, `level`…), `tempbar [h,w] NAME`, `tempgraph [h,w] NAME [c1 c2]`, `fangraph`, `loadbar`, `loadgraph`, `controlbar` |
 | Memory | `mem`, `memmax`, `memfree`, `memperc`, `membar`, `memgraph`, `swap`, `swapmax`, `swapperc`, `swapbar` |
-| Disk | `for_each_drive [all]` … `endfor` repeats what's between them for every ready drive (fixed and USB; `all` adds network and optical), with `drive` (e.g. `C:`) and `drive_label` (volume name). `fs_used`, `fs_size`, `fs_free`, `fs_used_perc`, `fs_free_perc` (all take an optional path; default: the loop's drive, else `C:\`), `fs_bar [h,w] [path]`, `fs_bar_free`, `diskio`, `diskio_read`, `diskio_write`, `diskiograph` |
+| Disk | `for_each_drive [local]` … `endfor` repeats what's between them for every drive letter Explorer shows: fixed, USB, mapped network drives (SMB, NFS, WebDAV, anything with a letter), DVDs with a disc and RAM disks. `local` leaves out network and optical drives. Inside the loop: `drive` (e.g. `C:`), `drive_label` (volume name; for a mapped drive its `\\server\share`), `drive_type` (`local`, `removable`, `network`, `optical`, `ram`) and `if_drive_ready` (false for a mapped drive that's disconnected). Network and DVD drives are checked in the background, so a slow or offline NAS never freezes the widget. `fs_used`, `fs_size`, `fs_free`, `fs_used_perc`, `fs_free_perc` (all take an optional path; default: the loop's drive, else `C:\`), `fs_bar [h,w] [path]`, `fs_bar_free`, `diskio`, `diskio_read`, `diskio_write`, `diskiograph` |
 | Network | `downspeed`, `upspeed`, `downspeedf`, `upspeedf` (KiB), `totaldown`, `totalup`, `downspeedgraph`, `upspeedgraph` (all take an optional interface name; without one, all adapters are summed), `addr [iface]` |
 | Processes | `processes`, `top name/cpu/mem/mem_res/pid N` (Nth by CPU), `top_mem name/cpu/mem/mem_res/pid N` (Nth by memory) |
 | System | `temp_unit` (°C or °F, following `temperature_unit`), `time [strftime format]`, `utime` (UTC), `uptime`, `uptime_short`, `nodename`, `user_names`, `sysname`, `os`, `kernel`, `machine` |
 | Battery | `battery_percent`, `battery_status`, `battery_time`, `battery_bar` |
 | Commands | `exec command` (every update), `execi seconds command`. Run in the background through `cmd.exe` |
 | Layout | `color [c]`, `color0`–`color9`, `font [spec]`, `alignr`, `alignc`, `goto X`, `offset X`, `hr [h]`, `stippled_hr [h]` |
-| Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_gpu_driver`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested |
+| Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_gpu_driver`, `if_drive_ready`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested |
 
 ¹ Needs LibreHardwareMonitor running; otherwise shows `N/A`. Temperatures are in °C, or °F with `temperature_unit fahrenheit`.
 

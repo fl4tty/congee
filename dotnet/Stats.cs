@@ -189,9 +189,13 @@ public sealed class Stats
         return (T)hit.value!;
     }
 
-    /// <summary>Re-scanned every 5 s, so USB drives appear and disappear on their own.</summary>
-    public List<(string root, string label)> Drives(bool includeAll) =>
-        Timed("drives:" + includeAll, 5, () => Hardware.ListDrives(includeAll));
+    readonly DriveScanner driveScanner = new();
+
+    /// <summary>Waits for the first background drive scan (network/DVD drives); for --once.</summary>
+    public void WaitForDrives(TimeSpan timeout) => driveScanner.Wait(timeout);
+
+    /// <summary>All drive letters (see Hardware.ScanDrives); USB sticks and mapped drives come and go on their own.</summary>
+    public List<DriveEntry> Drives() => driveScanner.Get();
 
     public List<GpuDriver> GpuDrivers() => Timed("gpu_drivers", 60, Hardware.ReadGpuDrivers);
 
@@ -215,14 +219,16 @@ public sealed class Stats
     });
 
     // ---- disks / battery -------------------------------------------------------------------
-    public DriveInfo? Disk(string path) => Cached("fs:" + path, () =>
+    public DiskUsage? Disk(string path) => Cached("fs:" + path, () =>
     {
-        try
+        if (string.IsNullOrWhiteSpace(path)) path = "C:\\";
+        if (path.Length >= 2 && path[1] == ':')
         {
-            var d = new DriveInfo(string.IsNullOrWhiteSpace(path) ? "C:\\" : path);
-            return d.IsReady ? d : null;
+            string root = char.ToUpperInvariant(path[0]) + ":\\";
+            if (Hardware.DriveKind(root) is "network" or "optical")
+                return driveScanner.Usage(root);  // fetched in the background: never block on a NAS
         }
-        catch { return null; }
+        return Hardware.Usage(path);
     });
 
     public (int percent, bool plugged, int secsLeft)? Battery() => Cached("bat", () =>

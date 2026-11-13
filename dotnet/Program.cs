@@ -123,6 +123,7 @@ public static class Program
                 var st = new Stats();
                 st.Sensors.Configure(settings["sensors_url"], 1.0);
                 st.Sensors.RefreshNow();
+                st.WaitForDrives(TimeSpan.FromSeconds(15));  // include network/DVD drives, scanned in the background
                 var ev = new Evaluator(st, settings, 1.0, Config.IsHex6);
                 var tokens = Config.Tokenize(text);
                 st.Sample();

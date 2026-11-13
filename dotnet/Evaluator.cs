@@ -91,6 +91,7 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case "if_sensors": st.Sensors.Get(); return st.Sensors.Ok;
             case "if_gpu": return Gpu() != null;
             case "if_gpu_driver": return GpuDriver() != null;
+            case "if_drive_ready": return drive?.Ready == true;
             case "if_sensor" or "if_gpu_sensor":
             {
                 int sp = a.IndexOf(' ');
@@ -138,8 +139,8 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 "cpubar" => st.CpuValue(src) / 100,
                 "membar" => st.Mem().percent / 100,
                 "swapbar" => st.Swap().percent / 100,
-                "fs_bar" => st.Disk(src.Length > 0 ? src : drive.root ?? "") is { } d ? 1 - (double)d.AvailableFreeSpace / d.TotalSize : 0,
-                "fs_bar_free" => st.Disk(src.Length > 0 ? src : drive.root ?? "") is { } d2 ? (double)d2.AvailableFreeSpace / d2.TotalSize : 0,
+                "fs_bar" => st.Disk(src.Length > 0 ? src : drive?.Root ?? "") is { Total: > 0 } d ? 1 - (double)d.Avail / d.Total : 0,
+                "fs_bar_free" => st.Disk(src.Length > 0 ? src : drive?.Root ?? "") is { Total: > 0 } d2 ? (double)d2.Avail / d2.Total : 0,
                 "battery_bar" => (st.Battery()?.percent ?? 0) / 100.0,
                 "tempbar" => (st.Sensors.Find("temperature", src)?.Value ?? 0) / tempMax,
                 "loadbar" or "controlbar" => (st.Sensors.Find(SensorWidgetTypes[name], src)?.Value ?? 0) / 100,
@@ -205,13 +206,13 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case "swapmax": return Config.FmtBytes(st.Swap().total);
             case "swapperc": return F0(st.Swap().percent);
             case "fs_used" or "fs_size" or "fs_free" or "fs_used_perc" or "fs_free_perc":
-                if (st.Disk(a.Length > 0 ? a : drive.root ?? "") is not { } d) return "N/A";
-                double used = d.TotalSize - d.TotalFreeSpace, pct = 100.0 * used / d.TotalSize;
+                if (st.Disk(a.Length > 0 ? a : drive?.Root ?? "") is not { Total: > 0 } d) return "N/A";
+                double used = d.Total - d.Free, pct = 100.0 * used / d.Total;
                 return name switch
                 {
                     "fs_used" => Config.FmtBytes(used),
-                    "fs_size" => Config.FmtBytes(d.TotalSize),
-                    "fs_free" => Config.FmtBytes(d.AvailableFreeSpace),
+                    "fs_size" => Config.FmtBytes(d.Total),
+                    "fs_free" => Config.FmtBytes(d.Avail),
                     "fs_used_perc" => F0(pct),
                     _ => F0(100 - pct),
                 };
@@ -263,8 +264,9 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
             case var dvar when DeviceVars.ContainsKey(dvar):
                 return DeviceSensor(dvar, a) is { } ds ? F0(Deg(ds.Value, DeviceVars[dvar].type)) : "N/A";
             case "temp_unit": return fahrenheit ? "°F" : "°C";
-            case "drive": return drive.root is { } root ? root[..2] : "";
-            case "drive_label": return drive.label;
+            case "drive": return drive is { } dr ? dr.Root[..2] : "";
+            case "drive_label": return drive?.Label ?? "";
+            case "drive_type": return drive?.Kind ?? "";
             case "gpu_driver" or "gpu_driver_version" or "gpu_driver_date" or "gpu_driver_name":
                 if (GpuDriver() is not { } gd) return "N/A";
                 return name switch
@@ -321,11 +323,13 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
     }
 
     // ---- drives / GPU driver -----------------------------------------------------------------------------
-    (string? root, string label) drive = (null, "");  // inside ${for_each_drive}
+    DriveEntry? drive;                                  // inside ${for_each_drive}
+    readonly Dictionary<string, DriveEntry> loopDrives = [];  // root -> drive, for the marker tokens
     const string DriveMarker = "\u0001drive";          // Name of the marker token ExpandLoops inserts
 
-    /// <summary>${for_each_drive [all]} BODY ${endfor} -> BODY once per ready drive, each copy preceded
-    /// by a marker token (Text = root, Args = label) that Build uses as the fs_* default.</summary>
+    /// <summary>${for_each_drive [local]} BODY ${endfor} -> BODY once per drive letter, each copy
+    /// preceded by a marker token (Text = root) that Build uses as the fs_* default.
+    /// "local" leaves out network and optical drives.</summary>
     List<Config.Token> ExpandLoops(List<Config.Token> tokens)
     {
         var result = new List<Config.Token>();
@@ -342,9 +346,12 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 else if (t.Name == "endfor" && --depth == 0) break;
             }
             var body = ExpandLoops(tokens.GetRange(i + 1, Math.Min(j, tokens.Count) - i - 1));
-            foreach (var (root, label) in st.Drives(tok.Args.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)))
+            bool localOnly = tok.Args.Trim().Equals("local", StringComparison.OrdinalIgnoreCase);
+            foreach (var d in st.Drives())
             {
-                result.Add(new Config.Token(false, root, DriveMarker, label));
+                if (localOnly && !Hardware.IsLocalKind(d.Kind)) continue;
+                loopDrives[d.Root] = d;
+                result.Add(new Config.Token(false, d.Root, DriveMarker, ""));
                 result.AddRange(body);
             }
             result.Add(new Config.Token(false, "", DriveMarker, ""));
@@ -406,7 +413,7 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
         foreach (var tok in tokens)
         {
             if (tok.IsLiteral) { if (active) AddText(tok.Text); continue; }
-            if (tok.Name == DriveMarker) { drive = (tok.Text.Length > 0 ? tok.Text : null, tok.Args); continue; }
+            if (tok.Name == DriveMarker) { drive = loopDrives.GetValueOrDefault(tok.Text); continue; }
             string name = tok.Name, args = tok.Args;
 
             if (name.StartsWith("if_"))

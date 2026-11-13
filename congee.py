@@ -432,13 +432,31 @@ class Sensors:
 # --------------------------------------------------------------------------
 # Drives and GPU drivers
 # --------------------------------------------------------------------------
-def list_drives(include_all: bool = False) -> list[tuple[str, str]]:
-    """Ready drives as (root, volume label): fixed, removable (USB) and RAM disks;
-    include_all adds network and optical drives. Empty card readers etc. are skipped."""
+DRIVE_KINDS = {2: "removable", 3: "local", 4: "network", 5: "optical", 6: "ram"}
+LOCAL_KINDS = ("removable", "local", "ram")
+
+
+def network_path(letter_colon: str) -> tuple[str, bool]:
+    r"""(\\server\share, connected) for a mapped drive (SMB, NFS, WebDAV...). Windows also
+    lists remembered mappings that aren't connected right now; asking those for volume
+    info only times out after ~10 s, so the caller skips that for them."""
+    buf, size = ctypes.create_unicode_buffer(1024), wt.DWORD(1024)
+    rc = ctypes.windll.mpr.WNetGetConnectionW(letter_colon, buf, ctypes.byref(size))
+    if rc == 1201:  # ERROR_CONNECTION_UNAVAIL: remembered, not connected
+        return buf.value, False
+    return (buf.value if rc == 0 else ""), True
+
+
+def scan_drives(slow: bool = True) -> list[dict]:
+    """Every drive letter Explorer would show, as dicts with root ("C:\\"), kind (local,
+    removable, network, optical, ram), label and ready. Network drives are listed even
+    when disconnected (Explorer shows them with a red X); empty card readers and optical
+    drives without a disc are skipped, as Explorer hides empty drives. The same local
+    volume under a second letter (subst, extra mount point) is listed once.
+    slow=False skips network/optical drives entirely: they can take seconds to answer."""
     if not IS_WINDOWS:
-        return [(p.mountpoint, "") for p in psutil.disk_partitions()]
+        return [{"root": p.mountpoint, "kind": "local", "label": "", "ready": True} for p in psutil.disk_partitions()]
     k32 = ctypes.windll.kernel32
-    wanted = {2, 3, 6} | ({4, 5} if include_all else set())  # DRIVE_REMOVABLE, FIXED, RAMDISK (+ REMOTE, CDROM)
     mask = k32.GetLogicalDrives()
     out, seen = [], set()
     old_mode = k32.SetErrorMode(0x0001)  # SEM_FAILCRITICALERRORS: no "insert a disk" dialogs
@@ -447,18 +465,68 @@ def list_drives(include_all: bool = False) -> list[tuple[str, str]]:
             if not (mask >> i) & 1:
                 continue
             root = chr(65 + i) + ":\\"
-            if k32.GetDriveTypeW(root) not in wanted:
+            kind = DRIVE_KINDS.get(k32.GetDriveTypeW(root))
+            if kind is None or (not slow and kind not in LOCAL_KINDS):
                 continue
             label, serial = ctypes.create_unicode_buffer(261), wt.DWORD()
-            if not k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0):
-                continue  # not ready (empty card reader, disconnected share)
-            if serial.value and serial.value in seen:
-                continue  # same volume under another letter (subst, second mount point)
-            seen.add(serial.value)
-            out.append((root, label.value))
+            if kind == "network":
+                unc, connected = network_path(root[:2])
+                ready = connected and bool(k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0))
+                out.append({"root": root, "kind": kind, "label": unc or label.value, "ready": ready})
+                continue
+            ready = bool(k32.GetVolumeInformationW(root, label, 261, ctypes.byref(serial), None, None, None, 0))
+            if not ready:
+                continue
+            if kind in LOCAL_KINDS and serial.value:
+                if serial.value in seen:
+                    continue
+                seen.add(serial.value)
+            out.append({"root": root, "kind": kind, "label": label.value, "ready": True})
     finally:
         k32.SetErrorMode(old_mode)
     return out
+
+
+class DriveScanner:
+    """Re-scans the drive letters every 5 s on a background thread, together with the
+    space on network and optical drives, so a slow or unreachable NAS never freezes the
+    widget. Until the first scan finishes, local drives are listed directly (fast)."""
+    INTERVAL = 5.0
+
+    def __init__(self):
+        self.drives: list[dict] | None = None
+        self.usage: dict = {}  # root -> psutil usage, network/optical drives only
+        self.busy = False
+        self.last = -1e9
+        self.scanned = threading.Event()  # set once the first full scan is done
+
+    def wait(self, timeout: float) -> None:
+        """Start a scan if none ran yet and wait for it (for --once, which prints a single frame)."""
+        self.get()
+        self.scanned.wait(timeout)
+
+    def get(self) -> list[dict]:
+        now = time.monotonic()
+        if not self.busy and now - self.last >= self.INTERVAL:
+            self.busy, self.last = True, now
+            threading.Thread(target=self._scan, name="congee-drives", daemon=True).start()
+        return self.drives if self.drives is not None else scan_drives(slow=False)
+
+    def _scan(self):
+        try:
+            drives = scan_drives(slow=True)
+            usage = {}
+            for d in drives:
+                if d["kind"] not in LOCAL_KINDS and d["ready"]:
+                    try:
+                        usage[d["root"]] = psutil.disk_usage(d["root"])
+                    except OSError:
+                        pass
+            self.drives, self.usage = drives, usage  # replace both at once; readers never see a mix
+        finally:
+            self.last = time.monotonic()  # next scan starts 5 s after this one ends, however long it took
+            self.busy = False
+            self.scanned.set()
 
 
 DISPLAY_CLASS_KEY = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
@@ -545,6 +613,7 @@ class Stats:
         self.sensors = Sensors()
         self._cache: dict = {}
         self._timed: dict = {}
+        self.drive_scanner = DriveScanner()
 
     def sample(self):
         now = time.monotonic()
@@ -586,9 +655,9 @@ class Stats:
             hit = self._timed[key] = (now, fn())
         return hit[1]
 
-    def drives(self, include_all: bool = False) -> list[tuple[str, str]]:
-        """Re-scanned every 5 s, so USB drives appear and disappear on their own."""
-        return self.timed(("drives", include_all), 5.0, lambda: list_drives(include_all))
+    def drives(self) -> list[dict]:
+        """All drive letters (see scan_drives); USB sticks and mapped drives come and go on their own."""
+        return self.drive_scanner.get()
 
     def gpu_drivers(self) -> list[dict]:
         return self.timed("gpu_drivers", 60.0, read_gpu_drivers)
@@ -605,6 +674,11 @@ class Stats:
 
     def disk(self, path):
         path = path or "C:\\"
+        if IS_WINDOWS and len(path) >= 2 and path[1] == ":":
+            root = path[:2].upper() + "\\"
+            kind = self.cached(("kind", root), lambda: DRIVE_KINDS.get(ctypes.windll.kernel32.GetDriveTypeW(root)))
+            if kind in ("network", "optical"):
+                return self.drive_scanner.usage.get(root)  # fetched in the background: never block on a NAS
         def get():
             try:
                 return psutil.disk_usage(path)
@@ -717,7 +791,7 @@ class Evaluator:
         self.scale = scale
         self.is_color = is_color  # callable(str) -> bool
         self.fahrenheit = settings.get("temperature_unit", "celsius").strip().lower() in ("fahrenheit", "f")
-        self.drive: tuple = (None, "")  # (root, label) inside ${for_each_drive}
+        self.drive: dict | None = None  # the current drive inside ${for_each_drive}
 
     def deg(self, v: float, stype: str) -> float:
         """Sensor value for display: temperatures follow temperature_unit (LHM reports °C).
@@ -747,6 +821,8 @@ class Evaluator:
             return self.gpu() is not None
         if name == "if_gpu_driver":
             return self.gpu_driver() is not None
+        if name == "if_drive_ready":
+            return bool(self.drive and self.drive["ready"])
         if name in ("if_sensor", "if_gpu_sensor"):
             stype, _, q = a.partition(" ")
             if name == "if_gpu_sensor":
@@ -757,6 +833,9 @@ class Evaluator:
 
     def sensor(self, stype: str, query: str) -> dict | None:
         return self.st.sensors.find(stype, query)
+
+    def drive_root(self) -> str | None:
+        return self.drive["root"] if self.drive else None
 
     def gpu_driver(self) -> dict | None:
         """Driver of the GPU the gpu_* variables use (matched by name). Without
@@ -838,7 +917,7 @@ class Evaluator:
             elif name == "swapbar":
                 frac = st.swap().percent / 100
             elif name in ("fs_bar", "fs_bar_free"):
-                d = st.disk(src or self.drive[0])
+                d = st.disk(src or self.drive_root())
                 frac = (d.percent / 100) if d else 0
                 if name == "fs_bar_free":
                     frac = 1 - frac
@@ -923,7 +1002,7 @@ class Evaluator:
         if name == "swapperc":
             return f"{st.swap().percent:.0f}"
         if name.startswith("fs_"):
-            d = st.disk(a or self.drive[0])
+            d = st.disk(a or self.drive_root())
             if d is None:
                 return "N/A"
             return {
@@ -1010,9 +1089,11 @@ class Evaluator:
         if name == "temp_unit":
             return "°F" if self.fahrenheit else "°C"
         if name == "drive":
-            return self.drive[0][:2] if self.drive[0] else ""
+            return self.drive["root"][:2] if self.drive else ""
         if name == "drive_label":
-            return self.drive[1]
+            return self.drive["label"] if self.drive else ""
+        if name == "drive_type":
+            return self.drive["kind"] if self.drive else ""
         if name in ("gpu_driver", "gpu_driver_version", "gpu_driver_date", "gpu_driver_name"):
             d = self.gpu_driver()
             if not d:
@@ -1062,8 +1143,9 @@ class Evaluator:
 
     # ---- whole template -> lines of segments ----------------------------
     def expand_loops(self, tokens: list[tuple]) -> list[tuple]:
-        """${for_each_drive [all]} BODY ${endfor} -> BODY once per ready drive, each copy
-        preceded by a ("drive", root, label) marker that build() uses as the fs_* default."""
+        """${for_each_drive [local]} BODY ${endfor} -> BODY once per drive letter, each copy
+        preceded by a ("drive", info) marker that build() uses as the fs_* default.
+        "local" leaves out network and optical drives."""
         out, i = [], 0
         while i < len(tokens):
             tok = tokens[i]
@@ -1082,10 +1164,13 @@ class Evaluator:
                         break
                 j += 1
             body = self.expand_loops(tokens[i + 1:j])
-            for root, label in self.st.drives(tok[2].strip().lower() == "all"):
-                out.append(("drive", root, label))
+            local_only = tok[2].strip().lower() == "local"
+            for d in self.st.drives():
+                if local_only and d["kind"] not in LOCAL_KINDS:
+                    continue
+                out.append(("drive", d))
                 out.extend(body)
-            out.append(("drive", None, ""))
+            out.append(("drive", None))
             i = j + 1
         return out
 
@@ -1113,7 +1198,7 @@ class Evaluator:
                     add_text(tok[1])
                 continue
             if tok[0] == "drive":
-                self.drive = (tok[1], tok[2])
+                self.drive = tok[1]
                 continue
             _, name, args, raw = tok
 
@@ -1897,6 +1982,7 @@ def main():
         tokens = tokenize(text)
         stats.sensors.configure(settings["sensors_url"], 1.0)
         stats.sensors.refresh_now()
+        stats.drive_scanner.wait(15)  # include network/DVD drives, which are scanned in the background
         stats.sample()
         ev.build(tokens)  # prime process CPU counters and exec commands
         time.sleep(1.0)
