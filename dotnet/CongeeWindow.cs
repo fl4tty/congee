@@ -71,17 +71,25 @@ public sealed class CongeeWindow : Window
             new("Open config folder", () => Shell(Path.GetDirectoryName(this.configPath)!)),
             new("Reload config", Reload),
             new("Reset position", () => { userPos = null; geom = null; Render(); }),
+            new("Logging", ToggleLogging, Checked: () => Log.Enabled),
             new("", null),
             new("Exit congee", () => { Log.StopReason("Exit congee chosen from the menu"); Application.Current.Shutdown(); }),
         };
         var menu = new ContextMenu();
+        var refresh = new List<Action>();  // labels and checkmarks that change, updated when the menu opens
         foreach (var it in items)
         {
             if (it.Action == null) { menu.Items.Add(new Separator()); continue; }
             var mi = new MenuItem { Header = it.Text };
             mi.Click += (_, _) => it.Action();
             menu.Items.Add(mi);
+            refresh.Add(() =>
+            {
+                mi.Header = it.DynamicText?.Invoke() ?? it.Text;
+                mi.IsChecked = it.Checked?.Invoke() == true;
+            });
         }
+        menu.Opened += (_, _) => refresh.ForEach(r => r());
         ContextMenu = menu;
         string name = Path.GetFileName(this.configPath);
         TrayIcon? tray = null;
@@ -111,6 +119,19 @@ public sealed class CongeeWindow : Window
         };
     }
 
+    /// <summary>Flips the "logging" setting in the config file (so it sticks) and applies it.</summary>
+    void ToggleLogging()
+    {
+        bool on = !Log.Enabled;
+        try
+        {
+            Config.SetSetting(configPath, "logging", on ? "yes" : "no",
+                "Write congee.log (starts, stops and crashes) to %APPDATA%\\congee: yes or no");
+        }
+        catch (Exception) { Log.SetEnabled(on); return; }  // config can't be saved: switch for this run only
+        Reload();  // picks up the new setting
+    }
+
     static void Shell(string path) => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
 
     void ToggleVisible()
@@ -134,6 +155,7 @@ public sealed class CongeeWindow : Window
         {
             (settings, text) = Config.Parse(configPath);
             configError = null;
+            Log.SetEnabled(Config.Yes(settings["logging"]));
         }
         catch (Exception e)
         {

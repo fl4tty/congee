@@ -10,11 +10,11 @@ namespace Congee;
 /// </summary>
 sealed class TrayIcon : IDisposable
 {
-    public sealed record Item(string Text, Action? Action, Func<string>? DynamicText = null);  // Action null = separator
+    public sealed record Item(string Text, Action? Action, Func<string>? DynamicText = null, Func<bool>? Checked = null);  // Action null = separator
 
     const int WM_TRAY = 0x8000 + 1, WM_LBUTTONUP = 0x0202, WM_RBUTTONUP = 0x0205, WM_NULL = 0;
     const uint NIM_ADD = 0, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4;
-    const uint MF_STRING = 0, MF_SEPARATOR = 0x800, TPM_RIGHTBUTTON = 0x2, TPM_RETURNCMD = 0x100, TPM_NONOTIFY = 0x80;
+    const uint MF_STRING = 0, MF_CHECKED = 0x8, MF_SEPARATOR = 0x800, TPM_RIGHTBUTTON = 0x2, TPM_RETURNCMD = 0x100, TPM_NONOTIFY = 0x80;
 
     readonly HwndSource source;
     readonly uint taskbarCreated;
@@ -95,7 +95,7 @@ sealed class TrayIcon : IDisposable
         {
             var it = items[i];
             if (it.Action == null) AppendMenu(menu, MF_SEPARATOR, 0, null);
-            else AppendMenu(menu, MF_STRING, (UIntPtr)(i + 1), it.DynamicText?.Invoke() ?? it.Text);
+            else AppendMenu(menu, MF_STRING | (it.Checked?.Invoke() == true ? MF_CHECKED : 0), (UIntPtr)(i + 1), it.DynamicText?.Invoke() ?? it.Text);
         }
         GetCursorPos(out var pt);
         SetForegroundWindow(source.Handle);  // otherwise the menu won't close when clicking elsewhere

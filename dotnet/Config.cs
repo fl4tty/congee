@@ -37,6 +37,7 @@ public static class Config
         ["temp_bar_max"] = "100",          // °C that count as a full tempbar/tempgraph
         ["temperature_unit"] = "celsius",  // or fahrenheit: how temperature values are shown
         ["gpu"] = "auto",
+        ["logging"] = "yes",               // write congee.log (starts, stops, crashes) to %APPDATA%\congee
     };
 
     static readonly Dictionary<string, string> AlignAliases = new()
@@ -161,6 +162,33 @@ public static class Config
     }
 
     // ---- small helpers ------------------------------------------------------------
+    /// <summary>Sets "key value" in the settings part of a config file (above TEXT): changes the
+    /// existing line, or adds one (with an optional comment) just above TEXT. Keeps the file's
+    /// BOM and line endings.</summary>
+    public static void SetSetting(string path, string key, string value, string? comment = null)
+    {
+        byte[] raw = File.ReadAllBytes(path);
+        bool bom = raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF;
+        string text = new System.Text.UTF8Encoding(false).GetString(raw, bom ? 3 : 0, raw.Length - (bom ? 3 : 0));
+        bool crlf = text.Contains("\r\n");
+        var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
+        int textAt = lines.FindIndex(l => l.Trim() == "TEXT");
+        int end = textAt < 0 ? lines.Count : textAt;
+        int at = lines.FindIndex(0, end, l => System.Text.RegularExpressions.Regex.IsMatch(l, $@"^\s*{key}(\s|$)"));
+        if (at >= 0) lines[at] = $"{key} {value}";
+        else
+        {
+            var add = new List<string>();
+            if (comment != null) add.Add("# " + comment);
+            add.Add($"{key} {value}");
+            add.Add("");
+            lines.InsertRange(end, add);
+        }
+        string result = string.Join(crlf ? "\r\n" : "\n", lines);
+        var bytes = new System.Text.UTF8Encoding(false).GetBytes(result);
+        File.WriteAllBytes(path, bom ? [0xEF, 0xBB, 0xBF, .. bytes] : bytes);
+    }
+
     public static bool Yes(string? v) => v?.Trim().ToLowerInvariant() is "yes" or "true" or "1" or "on";
 
     public static double Num(Dictionary<string, string> s, string key)

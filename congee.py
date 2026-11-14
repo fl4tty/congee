@@ -62,6 +62,8 @@ class Log:
     PATH = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "congee", "congee.log")
     MAX_BYTES = 1 << 20
     STOP_MARKER = "stopped: "
+    OFF_MARKER = "logging turned off"
+    enabled = True  # the "logging" setting; while False nothing is written
     _lock = threading.Lock()
     _seen: set = set()
     _reason: str | None = None
@@ -70,6 +72,8 @@ class Log:
 
     @classmethod
     def write(cls, message: str) -> None:
+        if not cls.enabled:
+            return
         with cls._lock:
             try:
                 os.makedirs(os.path.dirname(cls.PATH), exist_ok=True)
@@ -100,8 +104,22 @@ class Log:
         return f"{t // 3600}h {t % 3600 // 60}m" if t >= 3600 else f"{t // 60}m {t % 60}s"
 
     @classmethod
-    def started(cls, config_path: str) -> None:
-        cls._report_unclean_previous_run()
+    def set_enabled(cls, on: bool) -> None:
+        """Turn logging on or off (from the "logging" setting), noting the change in the log."""
+        if on == cls.enabled:
+            return
+        if on:
+            cls.enabled = True
+            cls.write("logging turned on")
+        else:
+            cls.write(cls.OFF_MARKER)
+            cls.enabled = False
+
+    @classmethod
+    def started(cls, config_path: str, enabled: bool = True) -> None:
+        cls.enabled = enabled
+        if enabled:
+            cls._report_unclean_previous_run()
         cls.write(f"started: congee (Python {platform.python_version()}), config {config_path}, Windows {platform.version()}")
 
         def crash(kind, exc, tb):
@@ -130,7 +148,7 @@ class Log:
                 f.seek(max(0, os.path.getsize(cls.PATH) - 4096))
                 lines = [ln.strip() for ln in f.read().decode("utf-8", "replace").splitlines() if ln.strip()]
             m = re.match(r"^(\S+ \S+) \[(\S+) (\d+)\] (.*)$", lines[-1]) if lines else None
-            if not m or m.group(4).startswith(cls.STOP_MARKER):
+            if not m or m.group(4).startswith(cls.STOP_MARKER) or m.group(4) == cls.OFF_MARKER:
                 return
             prev = int(m.group(3))
             try:
@@ -174,6 +192,7 @@ DEFAULTS = {
     "temp_bar_max": "100",  # °C that count as a full tempbar/tempgraph
     "temperature_unit": "celsius",  # or fahrenheit: how temperature values are shown
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
+    "logging": "yes",  # write congee.log (starts, stops, crashes) to %APPDATA%\congee
 }
 
 ALIGN_ALIASES = {
@@ -186,6 +205,26 @@ ALIGN_ALIASES = {
 # --------------------------------------------------------------------------
 # Config parsing
 # --------------------------------------------------------------------------
+def set_setting(path: str, key: str, value: str, comment: str | None = None) -> None:
+    """Set "key value" in the settings part of a config file (above TEXT): change the existing
+    line, or add one (with an optional comment) just above TEXT. Keeps BOM and line endings."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    text = raw[3 if bom else 0:].decode("utf-8")
+    crlf = "\r\n" in text
+    lines = text.replace("\r\n", "\n").split("\n")
+    end = next((i for i, ln in enumerate(lines) if ln.strip() == "TEXT"), len(lines))
+    at = next((i for i in range(end) if re.match(rf"^\s*{re.escape(key)}(\s|$)", lines[i])), None)
+    if at is not None:
+        lines[at] = f"{key} {value}"
+    else:
+        lines[end:end] = ([f"# {comment}"] if comment else []) + [f"{key} {value}", ""]
+    out = ("\r\n" if crlf else "\n").join(lines).encode("utf-8")
+    with open(path, "wb") as f:
+        f.write((b"\xef\xbb\xbf" if bom else b"") + out)
+
+
 def parse_config(path: str) -> tuple[dict, str]:
     with open(path, encoding="utf-8-sig") as f:  # -sig: tolerate Notepad-style BOM
         src = f.read()
@@ -1633,11 +1672,12 @@ class Tray:
 
     def _show_menu(self):
         menu = user32.CreatePopupMenu()
-        for i, (label, action) in enumerate(self.items):
+        for i, (label, action, *checked) in enumerate(self.items):
             if action is None:
                 user32.AppendMenuW(menu, 0x800, 0, None)  # MF_SEPARATOR
             else:
-                user32.AppendMenuW(menu, 0, i + 1, label() if callable(label) else label)
+                flags = 0x8 if checked and checked[0]() else 0  # MF_CHECKED
+                user32.AppendMenuW(menu, flags, i + 1, label() if callable(label) else label)
         pt = wt.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
         user32.SetForegroundWindow(self.hwnd)  # so the menu closes when you click elsewhere
@@ -1689,16 +1729,25 @@ class Congee:
             ("Open config folder", lambda: os.startfile(os.path.dirname(self.config_path))),
             ("Reload config", self.reload),
             ("Reset position", self.reset_position),
+            ("Logging", self.toggle_logging, lambda: Log.enabled),
             ("", None),
             ("Exit congee", self.exit_from_menu),
         ]
         self.menu = tk.Menu(self.root, tearoff=0)
-        for label, action in items:
+        self.menu_refresh = []  # labels and checkmarks that change, updated before the menu opens
+        for label, action, *checked in items:
             if action is None:
                 self.menu.add_separator()
+            elif checked:
+                var = tk.BooleanVar(self.root, value=checked[0]())
+                self.menu.add_checkbutton(label=label, variable=var, command=action)
+                self.menu_refresh.append(lambda var=var, get=checked[0]: var.set(get()))
             else:
                 self.menu.add_command(label=label() if callable(label) else label, command=action)
-        self.canvas.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
+                if callable(label):
+                    idx = self.menu.index("end")
+                    self.menu_refresh.append(lambda idx=idx, get=label: self.menu.entryconfigure(idx, label=get()))
+        self.canvas.bind("<Button-3>", self.show_menu)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         # Tk prints callback errors to stderr, which pythonw throws away: log them instead
         self.root.report_callback_exception = lambda kind, exc, tb: Log.once(
@@ -1725,6 +1774,7 @@ class Congee:
         try:
             self.settings, text = parse_config(self.config_path)
             self.config_error = None
+            Log.set_enabled(yes(self.settings["logging"]))
         except Exception as e:  # noqa: BLE001
             self.settings, text = dict(DEFAULTS), ""
             self.config_error = f"Config error: {e}"
@@ -1788,6 +1838,22 @@ class Congee:
             self.root.deiconify()
             self.root.update_idletasks()
             self.apply_window_styles()
+
+    def show_menu(self, e):
+        for refresh in self.menu_refresh:
+            refresh()
+        self.menu.tk_popup(e.x_root, e.y_root)
+
+    def toggle_logging(self):
+        """Flip the "logging" setting in the config file (so it sticks) and apply it."""
+        on = not Log.enabled
+        try:
+            set_setting(self.config_path, "logging", "yes" if on else "no",
+                        r"Write congee.log (starts, stops and crashes) to %APPDATA%\congee: yes or no")
+        except OSError:  # config can't be saved: switch for this run only
+            Log.set_enabled(on)
+            return
+        self.reload()  # picks up the new setting
 
     def exit_from_menu(self):
         Log.stop_reason("Exit congee chosen from the menu")
@@ -2195,7 +2261,11 @@ def main():
         return
 
     set_dpi_awareness()
-    Log.started(os.path.abspath(args.config))
+    try:
+        logging_on = yes(parse_config(args.config)[0]["logging"])
+    except Exception:  # noqa: BLE001 - a broken config is reported in the widget itself
+        logging_on = True
+    Log.started(os.path.abspath(args.config), logging_on)
     Congee(args.config).run()
     Log.stopped(0)
 

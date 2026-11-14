@@ -8,6 +8,7 @@
 #
 #   1.2.0  temperature_unit setting; ${temp_unit} instead of a fixed degrees-C sign;
 #          GPU driver line; every drive (with its own read/write) instead of only C:
+#   1.2.2  logging setting (yes; the tray menu's Logging item switches it)
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -30,6 +31,15 @@ if ($text -notmatch '(?m)^\s*temperature_unit\b' -and $text -match '(?m)^TEXT\s*
              "temperature_unit celsius`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the temperature_unit setting (celsius; set it to fahrenheit for degrees F)')
+}
+
+# --- logging setting, just above TEXT --------------------------------------------------------
+if ($text -notmatch '(?m)^\s*logging\b' -and $text -match '(?m)^TEXT\s*$') {
+    $block = "# Write congee.log (starts, stops and crashes) to %APPDATA%\congee: yes or no.`n" +
+             "# The Logging item in the tray menu switches this too.`n" +
+             "logging yes`n`n"
+    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
+    $changes.Add('added the logging setting (on; switch it from the tray menu)')
 }
 
 # --- ${temp_unit} instead of a fixed degrees-C sign after temperature variables -------------

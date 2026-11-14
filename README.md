@@ -166,6 +166,7 @@ Command-line options (the same in both editions; Python ones run as `.venv\Scrip
   | Open config folder | Open the folder that holds it |
   | Reload config | Re-read the config now (saving the file also does this) |
   | Reset position | Move it back to where the config places it, after dragging |
+  | Logging | Turn the [log file](#log-file) on or off (checked = on). Saved in your config as `logging yes/no` |
   | Exit congee | Stop congee |
 
   Windows 11 tucks new tray icons behind the **^** arrow. To keep congee's icon on the taskbar, go to
@@ -310,6 +311,7 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `sensors_url` | `http://localhost:8085/data.json` | Where LibreHardwareMonitor's web server is |
 | `temp_bar_max` | 100 | °C that fill a temperature bar or graph (always °C, whatever `temperature_unit` says) |
 | `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
+| `logging` | yes | `no` stops writing `congee.log`. The tray menu's **Logging** item changes this for you |
 
 ## Variables
 
@@ -367,6 +369,10 @@ time congee starts, it notes that the previous run ended without logging a stop,
 Thanks to the hourly line, that tells you when it was last seen alive, to within an hour.
 
 The log is kept under about 1 MB; older entries move to `congee.log.1`.
+
+Logging is on by default. To turn it off or back on, click **Logging** in the tray menu (a checkmark means on).
+This sets `logging no` or `logging yes` in your config, so the choice sticks; you can also edit that line yourself.
+The log notes when logging is turned off or on.
 
 **Known limits:**
 - `freq` often shows the CPU's base clock, because that's what Windows reports, not the live boost clock.

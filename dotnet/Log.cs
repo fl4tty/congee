@@ -20,11 +20,16 @@ static class Log
     static readonly int pid = Environment.ProcessId;
     static readonly HashSet<string> seen = [];
     static string? stopReason;
+    const string OffMarker = "logging turned off";
+
+    /// <summary>The "logging" setting; while false nothing is written.</summary>
+    public static bool Enabled { get; private set; } = true;
     static Timer? heartbeat;
     static readonly DateTime started = DateTime.Now;
 
     public static void Write(string message)
     {
+        if (!Enabled) return;
         lock (gate)
         {
             try
@@ -49,9 +54,18 @@ static class Log
     /// <summary>Remembers why congee is about to stop; the first reason given wins.</summary>
     public static void StopReason(string reason) => Interlocked.CompareExchange(ref stopReason, reason, null);
 
-    public static void Started(string configPath)
+    /// <summary>Turns logging on or off (from the "logging" setting), noting the change in the log.</summary>
+    public static void SetEnabled(bool on)
     {
-        ReportUncleanPreviousRun();
+        if (on == Enabled) return;
+        if (on) { Enabled = true; Write("logging turned on"); }
+        else { Write(OffMarker); Enabled = false; }
+    }
+
+    public static void Started(string configPath, bool enabled)
+    {
+        Enabled = enabled;
+        if (enabled) ReportUncleanPreviousRun();
         string version = typeof(Log).Assembly.GetName().Version?.ToString(3) ?? "?";
         Write($"started: congee {version}, config {configPath}, Windows {Environment.OSVersion.Version}");
         heartbeat = new Timer(_ => Write($"still running (up {Uptime()})"), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
@@ -107,7 +121,7 @@ static class Log
                     if (line.Trim().Length > 0) last = line.Trim();
             }
             var m = Regex.Match(last, @"^(\S+ \S+) \[(\S+) (\d+)\] (.*)$");
-            if (!m.Success || m.Groups[4].Value.StartsWith(StopMarker)) return;
+            if (!m.Success || m.Groups[4].Value.StartsWith(StopMarker) || m.Groups[4].Value == OffMarker) return;
             int prev = int.Parse(m.Groups[3].Value);
             try
             {

@@ -53,7 +53,9 @@ public static class Program
             return RunCli(mode, config);
         }
 
-        Log.Started(Path.GetFullPath(config));
+        bool logging = true;
+        try { logging = Config.Yes(Config.Parse(config).settings["logging"]); } catch { }
+        Log.Started(Path.GetFullPath(config), logging);
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         app.SessionEnding += (_, e) =>
         {
