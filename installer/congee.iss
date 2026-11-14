@@ -1,9 +1,10 @@
 ; congee installer (Inno Setup 6). Build with installer\build.ps1.
 ;
-; - Lets the user pick the .NET edition, the Python edition, or both.
-; - A "Dependencies" page checks for Python 3.12, the .NET 10 Desktop Runtime and
-;   LibreHardwareMonitor (and winget, which installs the others). Installed ones show ticked;
-;   tick a missing one to install it from its official source (winget, or its download page).
+; - An "Edition" page describes the .NET and Python editions; the user picks one.
+; - A "Requirements" page then lists what that edition needs (.NET 10 Desktop Runtime or
+;   Python 3.12), LibreHardwareMonitor, and winget, which installs the others. Installed ones
+;   show ticked; tick a missing one to install it from its official source (winget, or its
+;   download page).
 ; - Installs per user (no admin needed for congee itself) into
 ;   %LOCALAPPDATA%\Programs\congee, creates %APPDATA%\congee\congee.conf if it
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
@@ -34,15 +35,22 @@ UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\congee.ico
 SetupIconFile=..\congee.ico
 
+; The Edition page (in [Code]) picks one of these; the standard components page is skipped.
+; Silent installs can still pass /COMPONENTS="dotnet", "python" or "dotnet,python".
 [Types]
-Name: "dotnet"; Description: ".NET edition (recommended)"
+Name: "dotnet"; Description: ".NET edition"
 Name: "python"; Description: "Python edition"
-Name: "both"; Description: "Both editions"
 Name: "custom"; Description: "Custom"; Flags: iscustom
 
 [Components]
-Name: "dotnet"; Description: ".NET edition: best-looking text (needs the .NET 10 Desktop Runtime)"; Types: dotnet both
-Name: "python"; Description: "Python edition: smallest memory use (needs Python 3.12)"; Types: python both
+Name: "dotnet"; Description: ".NET edition"; Types: dotnet
+Name: "python"; Description: "Python edition"; Types: python
+
+; Switching editions: remove the one that wasn't picked, so only one starts and shows in Start.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\python"; Components: not python
+Type: files; Name: "{group}\congee (Python edition).lnk"; Components: not python
+Type: files; Name: "{app}\congee.exe"; Components: not dotnet
 
 [Tasks]
 Name: "startup"; Description: "Start congee when I sign in to Windows"; Flags: unchecked
@@ -107,9 +115,12 @@ const
   URL_WINGET = 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1';  { App Installer in the Microsoft Store }
 
 var
+  EditionPage: TWizardPage;
+  NetRadio, PyRadio: TNewRadioButton;
   DepPage: TInputOptionWizardPage;
-  DepPresent: array[0..3] of Boolean;
-  DepVisited: Boolean;
+  DepPresent, DepChosen: array[0..3] of Boolean;
+  DepRow: array[0..3] of Integer;  { which DEP_ each visible row is }
+  DepRows: Integer;
   InstallPy, InstallNet, InstallLhm, InstallWinget: Boolean;
 
 { ---------------------------------------------------------------- detection }
@@ -229,76 +240,136 @@ end;
 
 { ---------------------------------------------------------- dependency page }
 
-procedure InitializeWizard();
-var
-  How: String;
+function AddDescription(Parent: TWizardPage; Top: Integer; Text: String): TNewStaticText;
 begin
-  if WingetExe() <> '' then
-    How := 'Tick anything missing that you want, and setup installs it with winget from its official source ' +
-           'when you click Install, each under its own license.'
-  else
-    How := 'winget isn''t available, so for anything missing you tick, setup opens its official download ' +
-           'page when you click Install.';
-  DepPage := CreateInputOptionPage(wpSelectTasks, 'Requirements', 'Software congee needs or can use',
-    'Ticked items are already installed. ' + How, False, True);
-  DepPage.Add('LibreHardwareMonitor (optional: temperatures, fans, GPU stats)');
-  DepPage.Add('.NET 10 Desktop Runtime (for the .NET edition)');
-  DepPage.Add('Python 3.12 (for the Python edition)');
-  DepPage.Add('winget (lets setup install the others)');
+  Result := TNewStaticText.Create(Parent);
+  Result.Parent := Parent.Surface;
+  Result.Left := ScaleX(18);
+  Result.Top := Top;
+  Result.Width := Parent.SurfaceWidth - ScaleX(18);
+  Result.AutoSize := False;
+  Result.WordWrap := True;
+  Result.Height := ScaleY(48);
+  Result.Caption := Text;
 end;
 
-{ Installed: ticked and greyed out. Missing: unticked (the user's choice is kept on later visits),
-  with where it comes from. }
-procedure SetDep(Index: Integer; Present, Needed: Boolean; Source: String);
+function AddRadio(Parent: TWizardPage; Top: Integer; Caption: String): TNewRadioButton;
 begin
-  DepPresent[Index] := Present;
-  DepPage.CheckListBox.ItemEnabled[Index] := not Present;
-  if Present then
-  begin
-    DepPage.Values[Index] := True;
-    DepPage.CheckListBox.ItemSubItem[Index] := 'Installed';
-  end
+  Result := TNewRadioButton.Create(Parent);
+  Result.Parent := Parent.Surface;
+  Result.Top := Top;
+  Result.Width := Parent.SurfaceWidth;
+  Result.Height := ScaleY(18);
+  Result.Font.Style := [fsBold];
+  Result.Caption := Caption;
+end;
+
+function DepIntro(Net, Winget: Boolean): String;
+begin
+  if Net then Result := 'What the .NET edition needs. ' else Result := 'What the Python edition needs. ';
+  Result := Result + 'Ticked items are already installed. ';
+  if Winget then
+    Result := Result + 'Tick anything missing that you want, and setup installs it with winget from its ' +
+              'official source when you click Install, each under its own license.'
   else
-  begin
-    if not DepVisited then DepPage.Values[Index] := False;
-    if Needed then
-      DepPage.CheckListBox.ItemSubItem[Index] := 'Missing - from ' + Source
-    else
-      DepPage.CheckListBox.ItemSubItem[Index] := 'Not needed - from ' + Source;
-  end;
+    Result := Result + 'winget isn''t available, so for anything missing you tick, setup opens its official ' +
+              'download page when you click Install.';
+end;
+
+procedure InitializeWizard();
+var
+  Note: TNewStaticText;
+begin
+  EditionPage := CreateCustomPage(wpSelectDir, 'Edition', 'Which edition of congee do you want?');
+  NetRadio := AddRadio(EditionPage, 0, '.NET edition (recommended)');
+  AddDescription(EditionPage, ScaleY(22),
+    'The best-looking text: true per-pixel transparency keeps text crisp on any wallpaper, and a ' +
+    'semi-transparent background fades only the background, like real conky. Uses about 190 MB of memory. ' +
+    'Needs the .NET 10 Desktop Runtime from Microsoft.');
+  PyRadio := AddRadio(EditionPage, ScaleY(84), 'Python edition');
+  AddDescription(EditionPage, ScaleY(106),
+    'The smallest footprint, about 60 MB of memory, and easy to tweak if you know Python. Text can get a ' +
+    'slight dark edge on bright wallpapers. Needs Python 3.12 from python.org; setup adds the psutil ' +
+    'package itself.');
+  Note := AddDescription(EditionPage, ScaleY(176),
+    'Both show the same things and use the same config file, so you can switch any time by running ' +
+    'setup again. Next, setup checks what the edition you pick needs.');
+  Note.Left := 0;
+  Note.Width := EditionPage.SurfaceWidth;
+  { Pre-select what's installed (or passed with /COMPONENTS): Python only if .NET isn't picked }
+  PyRadio.Checked := WizardIsComponentSelected('python') and not WizardIsComponentSelected('dotnet');
+  NetRadio.Checked := not PyRadio.Checked;
+
+  { The intro is set per edition when the page shows; the longest version is given here so the
+    page leaves room for it above the list. }
+  DepPage := CreateInputOptionPage(EditionPage.ID, 'Requirements', 'Software the edition you picked needs or can use',
+    DepIntro(False, True), False, True);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := PageID = wpSelectComponents;
+end;
+
+{ One row: installed = ticked and greyed out; missing = the user's choice, with where it comes from. }
+procedure AddDep(Dep: Integer; Caption: String; Present: Boolean; Source: String);
+var
+  Sub: String;
+begin
+  DepPresent[Dep] := Present;
+  if Present then Sub := 'Installed' else Sub := 'Missing - from ' + Source;
+  DepPage.CheckListBox.AddCheckBox(Caption, Sub, 0, Present or DepChosen[Dep], not Present, False, False, nil);
+  DepRow[DepRows] := Dep;
+  DepRows := DepRows + 1;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = DepPage.ID then
   begin
-    SetDep(DEP_LHM, LhmInstalled(), True, 'GitHub');
-    SetDep(DEP_NET, HasDesktopRuntime10(), WizardIsComponentSelected('dotnet'), 'Microsoft');
-    SetDep(DEP_PY, FindPython312() <> '', WizardIsComponentSelected('python'), 'python.org');
-    SetDep(DEP_WINGET, WingetExe() <> '', True, 'Microsoft Store');
-    DepVisited := True;
+    DepPage.SubCaptionLabel.Caption := DepIntro(NetRadio.Checked, WingetExe() <> '');
+    DepPage.CheckListBox.Items.Clear;
+    DepRows := 0;
+    if NetRadio.Checked then
+      AddDep(DEP_NET, '.NET 10 Desktop Runtime (required)', HasDesktopRuntime10(), 'Microsoft')
+    else
+      AddDep(DEP_PY, 'Python 3.12 (required)', FindPython312() <> '', 'python.org');
+    AddDep(DEP_LHM, 'LibreHardwareMonitor (optional: temperatures, fans, GPU stats)', LhmInstalled(), 'GitHub');
+    AddDep(DEP_WINGET, 'winget (lets setup install the others)', WingetExe() <> '', 'Microsoft Store');
   end;
+end;
+
+function DepTicked(Dep: Integer): Boolean;
+begin
+  Result := DepChosen[Dep] and not DepPresent[Dep];
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Missing: String;
+  I: Integer;
+  Name: String;
 begin
   Result := True;
-  if CurPageID = DepPage.ID then
+  if CurPageID = EditionPage.ID then
   begin
-    InstallLhm := DepPage.Values[DEP_LHM] and not DepPresent[DEP_LHM];
-    InstallNet := DepPage.Values[DEP_NET] and not DepPresent[DEP_NET];
-    InstallPy := DepPage.Values[DEP_PY] and not DepPresent[DEP_PY];
-    InstallWinget := DepPage.Values[DEP_WINGET] and not DepPresent[DEP_WINGET];
-    Missing := '';
-    if WizardIsComponentSelected('python') and not InstallPy and not DepPresent[DEP_PY] then
-      Missing := Missing + #13#10 + '  - Python 3.12 (the Python edition will not run without it)';
-    if WizardIsComponentSelected('dotnet') and not InstallNet and not DepPresent[DEP_NET] then
-      Missing := Missing + #13#10 + '  - .NET 10 Desktop Runtime (the .NET edition will not run without it)';
-    if Missing <> '' then
-      Result := MsgBox('These are missing and not ticked:' + Missing + #13#10#13#10 +
-                       'Continue anyway? You can install them later and congee will work then.',
+    if NetRadio.Checked then WizardSelectComponents('dotnet,!python')
+    else WizardSelectComponents('python,!dotnet');
+  end
+  else if CurPageID = DepPage.ID then
+  begin
+    for I := 0 to DepRows - 1 do
+      if not DepPresent[DepRow[I]] then DepChosen[DepRow[I]] := DepPage.CheckListBox.Checked[I];
+    { Only what's on the page for this edition gets installed }
+    InstallLhm := DepTicked(DEP_LHM);
+    InstallWinget := DepTicked(DEP_WINGET);
+    InstallNet := NetRadio.Checked and DepTicked(DEP_NET);
+    InstallPy := PyRadio.Checked and DepTicked(DEP_PY);
+    Name := '';
+    if NetRadio.Checked and not DepPresent[DEP_NET] and not InstallNet then Name := '.NET 10 Desktop Runtime';
+    if PyRadio.Checked and not DepPresent[DEP_PY] and not InstallPy then Name := 'Python 3.12';
+    if Name <> '' then
+      Result := MsgBox(Name + ' is missing and not ticked, and congee won''t run without it.' + #13#10#13#10 +
+                       'Continue anyway? You can install it later and congee will work then.',
                        mbConfirmation, MB_YESNO) = IDYES;
   end;
 end;

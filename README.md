@@ -58,20 +58,22 @@ and run it, or [build it yourself](#building-the-installer). It needs no admin r
 only, into `%LOCALAPPDATA%\Programs\congee`. The installer isn't code-signed, so Windows SmartScreen may warn you:
 choose *More info* → *Run anyway*.
 
-1. **Choose the edition:** .NET, Python, or both.
-2. **Choose extras:** start congee with Windows, desktop shortcut.
-3. **Requirements page:** setup lists everything congee needs or can use and checks what's already on your PC.
-   Installed items are ticked and greyed out. Missing ones are unticked, marked *Missing* (or *Not needed*, for an
-   edition you didn't pick), with where they come from. Tick any you want, and when you click Install setup installs
+1. **Edition page:** pick the .NET edition (recommended) or the Python edition. Each has a short description of
+   how it looks, how much memory it uses and what it needs (see [Editions](#editions-python-or-net)). If you switch
+   editions later by running setup again, setup removes the one you didn't pick.
+2. **Requirements page:** setup lists what the edition you picked needs or can use and checks what's already on
+   your PC. Installed items are ticked and greyed out. Missing ones are unticked and marked *Missing*, with where
+   they come from. Tick any you want, and when you click Install setup installs
    them from their official source with winget, Windows' built-in package manager:
    - LibreHardwareMonitor (optional, from GitHub): temperatures, fans and GPU stats. Setup also turns on its web
      server on port 8085, so congee can read sensors with no extra setup.
-   - .NET 10 Desktop Runtime (.NET edition, from Microsoft)
-   - Python 3.12 (Python edition, from python.org): installed for your user only
+   - .NET 10 Desktop Runtime (.NET edition only, from Microsoft)
+   - Python 3.12 (Python edition only, from python.org): installed for your user only
    - winget itself (App Installer, from the Microsoft Store), if it's missing: setup opens its Store page
 
    Without winget, or if a winget install fails, setup opens that item's download page instead. Setup warns you if
-   you leave something your edition needs unticked.
+   you leave the runtime your edition needs unticked.
+3. **Choose extras:** start congee with Windows, desktop shortcut.
 4. Setup copies the files and builds the Python environment (`.venv` with psutil) if you picked the Python edition.
    It also puts a starter config in `%APPDATA%\congee\congee.conf`, but only if you don't already have one.
    When you upgrade, setup adds the new version's features to your existing config, such as the drive list and
