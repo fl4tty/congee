@@ -2,7 +2,8 @@
 ;
 ; - Lets the user pick the .NET edition, the Python edition, or both.
 ; - A "Dependencies" page checks for Python 3.12, the .NET 10 Desktop Runtime and
-;   LibreHardwareMonitor, and offers to install whatever is missing through winget.
+;   LibreHardwareMonitor (and winget, which installs the others). Installed ones show ticked;
+;   tick a missing one to install it from its official source (winget, or its download page).
 ; - Installs per user (no admin needed for congee itself) into
 ;   %LOCALAPPDATA%\Programs\congee, creates %APPDATA%\congee\congee.conf if it
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
@@ -95,19 +96,29 @@ FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file i
 
 [Code]
 const
-  DEP_PY = 0;
+  DEP_LHM = 0;
   DEP_NET = 1;
-  DEP_LHM = 2;
+  DEP_PY = 2;
+  DEP_WINGET = 3;
   WINGET_FLAGS = ' -e --accept-package-agreements --accept-source-agreements --disable-interactivity';
+  URL_LHM = 'https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases';
+  URL_NET = 'https://dotnet.microsoft.com/download/dotnet/10.0';
+  URL_PY = 'https://www.python.org/downloads/windows/';
+  URL_WINGET = 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1';  { App Installer in the Microsoft Store }
 
 var
   DepPage: TInputOptionWizardPage;
-  InstallPy, InstallNet, InstallLhm: Boolean;
+  DepPresent: array[0..3] of Boolean;
+  DepVisited: Boolean;
+  InstallPy, InstallNet, InstallLhm, InstallWinget: Boolean;
 
 { ---------------------------------------------------------------- detection }
 
 function WingetExe(): String;
 begin
+#ifdef SIMULATE_NO_WINGET
+  Result := ''; Exit;  { test build only: pretend winget isn't there }
+#endif
   Result := ExpandConstant('{localappdata}\Microsoft\WindowsApps\winget.exe');
   if not FileExists(Result) then
     Result := '';
@@ -220,37 +231,40 @@ end;
 
 procedure InitializeWizard();
 var
-  Sub: String;
+  How: String;
 begin
-  Sub := 'congee can install anything missing for you with winget, Windows'' built-in package manager. ' +
-         'Ticked items are downloaded and installed when you click Install, each under its own license. ' +
-         'Untick anything you would rather install yourself.';
-  if WingetExe() = '' then
-    Sub := 'winget (Windows'' package manager) was not found, so missing items cannot be installed automatically. ' +
-           'Install them yourself (see the README), then run this setup again or just start congee.';
-  DepPage := CreateInputOptionPage(wpSelectTasks, 'Dependencies', 'Software congee needs or can use', Sub, False, True);
-  DepPage.Add('Python 3.12');
-  DepPage.Add('.NET 10 Desktop Runtime');
-  DepPage.Add('LibreHardwareMonitor (optional): temperatures, fans and GPU stats; asks for admin when it runs');
+  if WingetExe() <> '' then
+    How := 'Tick anything missing that you want, and setup installs it with winget from its official source ' +
+           'when you click Install, each under its own license.'
+  else
+    How := 'winget isn''t available, so for anything missing you tick, setup opens its official download ' +
+           'page when you click Install.';
+  DepPage := CreateInputOptionPage(wpSelectTasks, 'Requirements', 'Software congee needs or can use',
+    'Ticked items are already installed. ' + How, False, True);
+  DepPage.Add('LibreHardwareMonitor (optional: temperatures, fans, GPU stats)');
+  DepPage.Add('.NET 10 Desktop Runtime (for the .NET edition)');
+  DepPage.Add('Python 3.12 (for the Python edition)');
+  DepPage.Add('winget (lets setup install the others)');
 end;
 
-procedure SetDep(Index: Integer; Needed, Present: Boolean; NeededFor: String);
+{ Installed: ticked and greyed out. Missing: unticked (the user's choice is kept on later visits),
+  with where it comes from. }
+procedure SetDep(Index: Integer; Present, Needed: Boolean; Source: String);
 begin
-  DepPage.CheckListBox.ItemEnabled[Index] := Needed and not Present and (WingetExe() <> '');
+  DepPresent[Index] := Present;
+  DepPage.CheckListBox.ItemEnabled[Index] := not Present;
   if Present then
   begin
-    DepPage.CheckListBox.ItemSubItem[Index] := 'Already installed';
-    DepPage.Values[Index] := False;
-  end
-  else if not Needed then
-  begin
-    DepPage.CheckListBox.ItemSubItem[Index] := 'Not needed';
-    DepPage.Values[Index] := False;
+    DepPage.Values[Index] := True;
+    DepPage.CheckListBox.ItemSubItem[Index] := 'Installed';
   end
   else
   begin
-    DepPage.CheckListBox.ItemSubItem[Index] := 'Missing: ' + NeededFor;
-    DepPage.Values[Index] := WingetExe() <> '';
+    if not DepVisited then DepPage.Values[Index] := False;
+    if Needed then
+      DepPage.CheckListBox.ItemSubItem[Index] := 'Missing - from ' + Source
+    else
+      DepPage.CheckListBox.ItemSubItem[Index] := 'Not needed - from ' + Source;
   end;
 end;
 
@@ -258,9 +272,11 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = DepPage.ID then
   begin
-    SetDep(DEP_PY, WizardIsComponentSelected('python'), FindPython312() <> '', 'needed for the Python edition');
-    SetDep(DEP_NET, WizardIsComponentSelected('dotnet'), HasDesktopRuntime10(), 'needed for the .NET edition');
-    SetDep(DEP_LHM, True, LhmInstalled(), 'for temperatures, fans and GPU stats');
+    SetDep(DEP_LHM, LhmInstalled(), True, 'GitHub');
+    SetDep(DEP_NET, HasDesktopRuntime10(), WizardIsComponentSelected('dotnet'), 'Microsoft');
+    SetDep(DEP_PY, FindPython312() <> '', WizardIsComponentSelected('python'), 'python.org');
+    SetDep(DEP_WINGET, WingetExe() <> '', True, 'Microsoft Store');
+    DepVisited := True;
   end;
 end;
 
@@ -271,16 +287,17 @@ begin
   Result := True;
   if CurPageID = DepPage.ID then
   begin
-    InstallPy := DepPage.Values[DEP_PY];
-    InstallNet := DepPage.Values[DEP_NET];
-    InstallLhm := DepPage.Values[DEP_LHM];
+    InstallLhm := DepPage.Values[DEP_LHM] and not DepPresent[DEP_LHM];
+    InstallNet := DepPage.Values[DEP_NET] and not DepPresent[DEP_NET];
+    InstallPy := DepPage.Values[DEP_PY] and not DepPresent[DEP_PY];
+    InstallWinget := DepPage.Values[DEP_WINGET] and not DepPresent[DEP_WINGET];
     Missing := '';
-    if WizardIsComponentSelected('python') and not InstallPy and (FindPython312() = '') then
+    if WizardIsComponentSelected('python') and not InstallPy and not DepPresent[DEP_PY] then
       Missing := Missing + #13#10 + '  - Python 3.12 (the Python edition will not run without it)';
-    if WizardIsComponentSelected('dotnet') and not InstallNet and not HasDesktopRuntime10() then
+    if WizardIsComponentSelected('dotnet') and not InstallNet and not DepPresent[DEP_NET] then
       Missing := Missing + #13#10 + '  - .NET 10 Desktop Runtime (the .NET edition will not run without it)';
     if Missing <> '' then
-      Result := MsgBox('These are still missing and won''t be installed:' + Missing + #13#10#13#10 +
+      Result := MsgBox('These are missing and not ticked:' + Missing + #13#10#13#10 +
                        'Continue anyway? You can install them later and congee will work then.',
                        mbConfirmation, MB_YESNO) = IDYES;
   end;
@@ -294,22 +311,39 @@ begin
   WizardForm.StatusLabel.Update;
 end;
 
-function RunWinget(Id, Extra, Title: String): Boolean;
+procedure OpenPage(Url: String);
 var
   Code: Integer;
 begin
+  ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, Code);
+end;
+
+{ Installs a requirement with winget; without winget, or if winget fails, offers its download page. }
+function InstallDep(Id, Extra, Title, Url: String): Boolean;
+var
+  Code: Integer;
+begin
+  Result := False;
+  if WingetExe() = '' then
+  begin
+    MsgBox('winget isn''t available, so setup will open the ' + Title + ' download page. ' +
+           'Install it from there; congee picks it up once it''s installed.', mbInformation, MB_OK);
+    OpenPage(Url);
+    Exit;
+  end;
   SetStatus('Installing ' + Title + ' with winget (this can take a few minutes)...');
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     Result := Exec(WingetExe(), 'install --id ' + Id + WINGET_FLAGS + Extra, '', SW_SHOWMINNOACTIVE,
                    ewWaitUntilTerminated, Code) and (Code = 0);
-    if not Result then
-      MsgBox(Title + ' could not be installed automatically (winget exit code ' + IntToStr(Code) + ').' + #13#10#13#10 +
-             'You can install it later from a terminal with:' + #13#10 + '  winget install --id ' + Id,
-             mbError, MB_OK);
   finally
     WizardForm.ProgressGauge.Style := npbstNormal;
   end;
+  if not Result then
+    if MsgBox(Title + ' could not be installed automatically (winget exit code ' + IntToStr(Code) + ').' + #13#10#13#10 +
+              'Open its download page to install it yourself?' + #13#10 + Url,
+              mbError, MB_YESNO) = IDYES then
+      OpenPage(Url);
 end;
 
 { Turn on LHM's web server (what congee reads) the first time, if LHM has no settings yet. }
@@ -397,9 +431,15 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    if InstallNet then RunWinget('Microsoft.DotNet.DesktopRuntime.10', '', '.NET 10 Desktop Runtime');
-    if InstallPy then RunWinget('Python.Python.3.12', ' --scope user', 'Python 3.12');
-    if InstallLhm then RunWinget('LibreHardwareMonitor.LibreHardwareMonitor', '', 'LibreHardwareMonitor');
+    if InstallWinget then
+    begin
+      MsgBox('Setup will open App Installer (which includes winget) in the Microsoft Store. ' +
+             'Run this setup again after installing it to install the other items with winget.', mbInformation, MB_OK);
+      OpenPage(URL_WINGET);
+    end;
+    if InstallNet then InstallDep('Microsoft.DotNet.DesktopRuntime.10', '', '.NET 10 Desktop Runtime', URL_NET);
+    if InstallPy then InstallDep('Python.Python.3.12', ' --scope user', 'Python 3.12', URL_PY);
+    if InstallLhm then InstallDep('LibreHardwareMonitor.LibreHardwareMonitor', '', 'LibreHardwareMonitor', URL_LHM);
   end;
   if CurStep = ssPostInstall then
   begin

@@ -60,15 +60,18 @@ choose *More info* → *Run anyway*.
 
 1. **Choose the edition:** .NET, Python, or both.
 2. **Choose extras:** start congee with Windows, desktop shortcut.
-3. **Dependencies page:** setup checks what's already on your PC. Each item shows *Already installed*, *Not needed*
-   (for an edition you didn't pick), or *Missing*. Missing items are ticked. When you click Install, setup installs
-   each ticked item with winget, Windows' built-in package manager:
-   - Python 3.12 (Python edition): installed for your user only
-   - .NET 10 Desktop Runtime (.NET edition)
-   - LibreHardwareMonitor (optional): temperatures, fans and GPU stats. Setup also turns on its web server on
-     port 8085, so congee can read sensors with no extra setup.
+3. **Requirements page:** setup lists everything congee needs or can use and checks what's already on your PC.
+   Installed items are ticked and greyed out. Missing ones are unticked, marked *Missing* (or *Not needed*, for an
+   edition you didn't pick), with where they come from. Tick any you want, and when you click Install setup installs
+   them from their official source with winget, Windows' built-in package manager:
+   - LibreHardwareMonitor (optional, from GitHub): temperatures, fans and GPU stats. Setup also turns on its web
+     server on port 8085, so congee can read sensors with no extra setup.
+   - .NET 10 Desktop Runtime (.NET edition, from Microsoft)
+   - Python 3.12 (Python edition, from python.org): installed for your user only
+   - winget itself (App Installer, from the Microsoft Store), if it's missing: setup opens its Store page
 
-   Untick anything you'd rather install yourself. Setup warns you if you leave a required item unticked.
+   Without winget, or if a winget install fails, setup opens that item's download page instead. Setup warns you if
+   you leave something your edition needs unticked.
 4. Setup copies the files and builds the Python environment (`.venv` with psutil) if you picked the Python edition.
    It also puts a starter config in `%APPDATA%\congee\congee.conf`, but only if you don't already have one.
    When you upgrade, setup adds the new version's features to your existing config, such as the drive list and
