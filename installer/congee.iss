@@ -10,7 +10,7 @@
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
 
 #define AppName "congee"
-#define AppVersion "1.2.1"
+#define AppVersion "1.2.2"
 
 [Setup]
 AppId={{6C7B1E64-3F0A-4E2B-9B7C-2C0E5A1D9F43}
