@@ -37,6 +37,7 @@ public static class Config
         ["temp_bar_max"] = "100",          // °C that count as a full tempbar/tempgraph
         ["temperature_unit"] = "celsius",  // or fahrenheit: how temperature values are shown
         ["gpu"] = "auto",
+        ["start_lhm"] = "ask",             // start LibreHardwareMonitor if it isn't running: ask, yes or no
         ["logging"] = "yes",               // write congee.log (starts, stops, crashes) to %APPDATA%\congee
     };
 

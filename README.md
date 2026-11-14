@@ -261,6 +261,12 @@ congee reads LHM's data from its local web server, so congee itself never needs 
 3. Optional: **Options → Start Minimized**, **Minimize To Tray** and **Run On Windows Startup**.
 4. Check it works: `congee.exe --sensors` (or `.venv\Scripts\python congee.py --sensors`) lists every sensor, then the GPUs found.
 
+**If LHM isn't running when congee starts**, congee offers to start it. It explains which features need LHM and gives
+you **Start it** or **Not now**, and Windows then asks for admin permission. Tick **Remember my choice** to skip the
+question next time; that sets `start_lhm yes` or `start_lhm no` in your config, and you can change it back to `ask`.
+Right after you sign in, congee waits a minute before checking, in case LHM's own *Run On Windows Startup* is about to
+start it. congee doesn't offer if LHM isn't installed, or if `sensors_url` points at another PC.
+
 **Any hardware brand.** The default config uses the `gpu_*` and `cpu_*` variables, so it works unchanged on AMD, NVIDIA and
 Intel GPUs and on AMD and Intel CPUs. Each of those variables tries every brand's sensor names in turn
 (e.g. `cpu_temp` reads `Core (Tctl/Tdie)` on AMD and `CPU Package` on Intel). Lines for hardware a PC doesn't have,
@@ -312,6 +318,7 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `temp_bar_max` | 100 | °C that fill a temperature bar or graph (always °C, whatever `temperature_unit` says) |
 | `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
 | `logging` | yes | `no` stops writing `congee.log`. The tray menu's **Logging** item changes this for you |
+| `start_lhm` | ask | What to do when LibreHardwareMonitor isn't running at start: `ask`, `yes` (start it; Windows asks for admin), or `no` |
 
 ## Variables
 
@@ -408,6 +415,7 @@ congee\
     ├── Sensors.cs         LibreHardwareMonitor sensors, GPU selection
     ├── Hardware.cs        Drive list, GPU driver versions
     ├── Log.cs             congee.log: starts, stops and their reasons, crashes
+    ├── Lhm.cs             Finds and starts LibreHardwareMonitor (the start_lhm prompt)
     ├── Strftime.cs        ${time} formatting
     ├── Native.cs          Windows API calls
     └── publish\congee.exe Built program (after dotnet publish)

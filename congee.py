@@ -192,6 +192,7 @@ DEFAULTS = {
     "temp_bar_max": "100",  # °C that count as a full tempbar/tempgraph
     "temperature_unit": "celsius",  # or fahrenheit: how temperature values are shown
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
+    "start_lhm": "ask",  # start LibreHardwareMonitor if it isn't running: ask, yes or no
     "logging": "yes",  # write congee.log (starts, stops, crashes) to %APPDATA%\congee
 }
 
@@ -1568,6 +1569,110 @@ if IS_WINDOWS:
     shell32.Shell_NotifyIconW.argtypes = [wt.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
 
 
+# --------------------------------------------------------------------------
+# LibreHardwareMonitor: congee needs it for temperatures, fans and GPU stats.
+# It must run as administrator, so starting it shows Windows' admin prompt.
+# --------------------------------------------------------------------------
+LHM_EXE = "LibreHardwareMonitor.exe"
+
+
+def lhm_running() -> bool:
+    for proc in psutil.process_iter(["name"]):
+        if (proc.info["name"] or "").lower() == LHM_EXE.lower():
+            return True
+    return False
+
+
+def find_lhm_exe() -> str | None:
+    """LibreHardwareMonitor.exe from a winget install (per user or machine), Program Files, or
+    wherever Windows' installed-apps list says it is; None if it isn't installed."""
+    import glob
+    local = os.environ.get("LOCALAPPDATA", "")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    for packages in (os.path.join(local, r"Microsoft\WinGet\Packages"), os.path.join(pf, r"WinGet\Packages")):
+        for d in glob.glob(os.path.join(packages, "LibreHardwareMonitor.LibreHardwareMonitor_*")):
+            if os.path.isfile(os.path.join(d, LHM_EXE)):
+                return os.path.join(d, LHM_EXE)
+    if os.path.isfile(os.path.join(pf, "LibreHardwareMonitor", LHM_EXE)):
+        return os.path.join(pf, "LibreHardwareMonitor", LHM_EXE)
+    import winreg
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\Uninstall") as un:
+                for i in range(winreg.QueryInfoKey(un)[0]):
+                    try:
+                        with winreg.OpenKey(un, winreg.EnumKey(un, i)) as k:
+                            name = winreg.QueryValueEx(k, "DisplayName")[0]
+                            loc = winreg.QueryValueEx(k, "InstallLocation")[0]
+                    except OSError:
+                        continue
+                    if str(name).lower().startswith("librehardwaremonitor") and os.path.isfile(os.path.join(loc, LHM_EXE)):
+                        return os.path.join(loc, LHM_EXE)
+        except OSError:
+            pass
+    return None
+
+
+def start_lhm(exe: str) -> bool:
+    """Start it as administrator (Windows asks for permission). False if declined or failed."""
+    try:
+        os.startfile(exe, "runas", cwd=os.path.dirname(exe))
+        Log.write("started LibreHardwareMonitor")
+        return True
+    except OSError as e:
+        if getattr(e, "winerror", None) == 1223:  # ERROR_CANCELLED: "No" on the admin prompt
+            Log.write("LibreHardwareMonitor not started: the admin prompt was declined")
+        else:
+            Log.write(f"couldn't start LibreHardwareMonitor: {e}")
+        return False
+
+
+def lhm_is_local(sensors_url: str) -> bool:
+    """True when sensors_url points at this PC (otherwise LHM runs somewhere else)."""
+    from urllib.parse import urlparse
+    host = (urlparse(sensors_url.strip()).hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "::1") or host == socket.gethostname().lower()
+
+
+def ask_start_lhm(root) -> tuple[bool, bool]:
+    """'Start LibreHardwareMonitor?' dialog. Returns (start, remember)."""
+    result = {"start": False}
+    win = tk.Toplevel(root)
+    win.title("congee")
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    frame = tk.Frame(win, padx=20, pady=18)
+    frame.pack()
+    tk.Label(frame, text="Start LibreHardwareMonitor?", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 8))
+    tk.Label(frame, justify="left", wraplength=420, font=("Segoe UI", 9),
+             text="LibreHardwareMonitor isn't running. congee needs it for temperatures, fan speeds, and GPU load, "
+                  "clocks, power and memory. Everything else works without it.\n\n"
+                  "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.").pack(anchor="w")
+    remember = tk.BooleanVar(win, False)
+    tk.Checkbutton(frame, text="Remember my choice", variable=remember, font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
+    buttons = tk.Frame(frame)
+    buttons.pack(anchor="e", pady=(14, 0))
+
+    def choose(start):
+        result["start"] = start
+        win.destroy()
+    yes_btn = tk.Button(buttons, text="Start it", width=11, default="active", command=lambda: choose(True))
+    yes_btn.pack(side="left", padx=(0, 8))
+    tk.Button(buttons, text="Not now", width=11, command=lambda: choose(False)).pack(side="left")
+    win.bind("<Return>", lambda e: choose(True))
+    win.bind("<Escape>", lambda e: choose(False))
+    win.protocol("WM_DELETE_WINDOW", lambda: choose(False))
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    win.geometry(f"+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 2}")
+    win.deiconify()
+    win.focus_force()
+    yes_btn.focus_set()
+    win.grab_set()
+    root.wait_window(win)
+    return result["start"], remember.get()
+
+
 class Tray:
     """Notification-area icon with a native right-click menu (same as the .NET edition).
     It runs on its own thread with its own Win32 message loop: tkinter must not be called
@@ -1753,6 +1858,10 @@ class Congee:
         self.root.report_callback_exception = lambda kind, exc, tb: Log.once(
             "error: " + "".join(__import__("traceback").format_exception(kind, exc, tb)).rstrip())
         self.root.after(3600_000, self.heartbeat)
+        # Offer to start LibreHardwareMonitor if it isn't running. Right after sign-in, wait a
+        # minute first: LHM's own "Run On Windows Startup" may still be about to start it.
+        if IS_WINDOWS:
+            self.root.after(60_000 if time.time() - psutil.boot_time() < 180 else 3_000, self.check_lhm)
         name = os.path.basename(self.config_path)
         self.tray = None
         if IS_WINDOWS:
@@ -1854,6 +1963,32 @@ class Congee:
             Log.set_enabled(on)
             return
         self.reload()  # picks up the new setting
+
+    def check_lhm(self):
+        """If LibreHardwareMonitor isn't running, start it (start_lhm yes), offer to (ask), or not (no)."""
+        if lhm_running() or not lhm_is_local(self.settings["sensors_url"]):
+            return
+        mode = self.settings["start_lhm"].strip().lower()
+        if mode in ("no", "false", "0", "off"):
+            Log.write("LibreHardwareMonitor isn't running (start_lhm is no)")
+            return
+        exe = find_lhm_exe()
+        if not exe:
+            Log.write("LibreHardwareMonitor isn't running and isn't installed")
+            return
+        start = True
+        if not yes(mode):  # ask
+            start, remember = ask_start_lhm(self.root)
+            if remember:
+                try:
+                    set_setting(self.config_path, "start_lhm", "yes" if start else "no",
+                                "Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no")
+                except OSError:
+                    pass
+            if not start:
+                Log.write('LibreHardwareMonitor not started: "Not now"' + (" (remembered: start_lhm no)" if remember else ""))
+        if start:
+            start_lhm(exe)
 
     def exit_from_menu(self):
         Log.stop_reason("Exit congee chosen from the menu")

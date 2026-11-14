@@ -8,7 +8,8 @@
 #
 #   1.2.0  temperature_unit setting; ${temp_unit} instead of a fixed degrees-C sign;
 #          GPU driver line; every drive (with its own read/write) instead of only C:
-#   1.2.2  logging setting (yes; the tray menu's Logging item switches it)
+#   1.2.2  logging setting (yes; the tray menu's Logging item switches it);
+#          start_lhm setting (ask: offer to start LibreHardwareMonitor if it isn't running)
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -40,6 +41,15 @@ if ($text -notmatch '(?m)^\s*logging\b' -and $text -match '(?m)^TEXT\s*$') {
              "logging yes`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the logging setting (on; switch it from the tray menu)')
+}
+
+# --- start_lhm setting, just above TEXT ------------------------------------------------------
+if ($text -notmatch '(?m)^\s*start_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
+    $block = "# Start LibreHardwareMonitor (needed for temperatures, fans and GPU stats) if it isn't`n" +
+             "# running when congee starts: ask, yes (start it; Windows asks for admin permission) or no.`n" +
+             "start_lhm ask`n`n"
+    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
+    $changes.Add('added the start_lhm setting (congee offers to start LibreHardwareMonitor when it is not running)')
 }
 
 # --- ${temp_unit} instead of a fixed degrees-C sign after temperature variables -------------

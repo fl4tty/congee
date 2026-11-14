@@ -116,7 +116,45 @@ public sealed class CongeeWindow : Window
         {
             dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
             Reload();
+            // Offer to start LibreHardwareMonitor if it isn't running. Right after sign-in, wait a
+            // minute first: LHM's own "Run On Windows Startup" may still be about to start it.
+            var lhmTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Environment.TickCount64 < 180_000 ? 60 : 3) };
+            lhmTimer.Tick += (_, _) => { lhmTimer.Stop(); CheckLhm(); };
+            lhmTimer.Start();
         };
+    }
+
+    /// <summary>If LibreHardwareMonitor isn't running, start it (start_lhm yes), offer to (ask), or not (no).</summary>
+    void CheckLhm()
+    {
+        if (Lhm.IsRunning() || !Lhm.IsLocal(settings["sensors_url"])) return;
+        string mode = settings["start_lhm"].Trim().ToLowerInvariant();
+        if (mode is "no" or "false" or "0" or "off")
+        {
+            Log.Write("LibreHardwareMonitor isn't running (start_lhm is no)");
+            return;
+        }
+        if (Lhm.FindExe() is not { } exe)
+        {
+            Log.Write("LibreHardwareMonitor isn't running and isn't installed");
+            return;
+        }
+        bool start = true;
+        if (!Config.Yes(mode))  // ask
+        {
+            (start, bool remember) = Lhm.Ask();
+            if (remember)
+            {
+                try
+                {
+                    Config.SetSetting(configPath, "start_lhm", start ? "yes" : "no",
+                        "Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no");
+                }
+                catch (Exception) { }
+            }
+            if (!start) Log.Write($"LibreHardwareMonitor not started: \"Not now\"{(remember ? " (remembered: start_lhm no)" : "")}");
+        }
+        if (start) Lhm.Start(exe);
     }
 
     /// <summary>Flips the "logging" setting in the config file (so it sticks) and applies it.</summary>
