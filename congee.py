@@ -1634,43 +1634,161 @@ def lhm_is_local(sensors_url: str) -> bool:
     return host in ("localhost", "127.0.0.1", "::1") or host == socket.gethostname().lower()
 
 
-def ask_start_lhm(root) -> tuple[bool, bool]:
-    """'Start LibreHardwareMonitor?' dialog. Returns (start, remember)."""
-    result = {"start": False}
+def lhm_dialog(root, heading: str, text: str, yes_label: str) -> tuple[bool, bool]:
+    """Heading, text, 'Remember my choice', and yes / 'Not now'. Returns (yes, remember)."""
+    result = {"yes": False}
     win = tk.Toplevel(root)
     win.title("congee")
     win.resizable(False, False)
     win.attributes("-topmost", True)
     frame = tk.Frame(win, padx=20, pady=18)
     frame.pack()
-    tk.Label(frame, text="Start LibreHardwareMonitor?", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 8))
-    tk.Label(frame, justify="left", wraplength=420, font=("Segoe UI", 9),
-             text="LibreHardwareMonitor isn't running. congee needs it for temperatures, fan speeds, and GPU load, "
-                  "clocks, power and memory. Everything else works without it.\n\n"
-                  "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.").pack(anchor="w")
+    tk.Label(frame, text=heading, font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 8))
+    tk.Label(frame, justify="left", wraplength=420, font=("Segoe UI", 9), text=text).pack(anchor="w")
     remember = tk.BooleanVar(win, False)
     tk.Checkbutton(frame, text="Remember my choice", variable=remember, font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
     buttons = tk.Frame(frame)
     buttons.pack(anchor="e", pady=(14, 0))
 
-    def choose(start):
-        result["start"] = start
+    def choose(yes_: bool):
+        result["yes"] = yes_
         win.destroy()
-    yes_btn = tk.Button(buttons, text="Start it", width=11, default="active", command=lambda: choose(True))
+    yes_btn = tk.Button(buttons, text=yes_label, width=max(11, len(yes_label) + 2), default="active", command=lambda: choose(True))
     yes_btn.pack(side="left", padx=(0, 8))
     tk.Button(buttons, text="Not now", width=11, command=lambda: choose(False)).pack(side="left")
     win.bind("<Return>", lambda e: choose(True))
     win.bind("<Escape>", lambda e: choose(False))
     win.protocol("WM_DELETE_WINDOW", lambda: choose(False))
-    win.update_idletasks()
-    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-    win.geometry(f"+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 2}")
-    win.deiconify()
+    center(win)
     win.focus_force()
     yes_btn.focus_set()
     win.grab_set()
     root.wait_window(win)
-    return result["start"], remember.get()
+    return result["yes"], remember.get()
+
+
+def center(win):
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    win.geometry(f"+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 2}")
+    win.deiconify()
+
+
+def ask_start_lhm(root) -> tuple[bool, bool]:
+    """'Start LibreHardwareMonitor?' dialog. Returns (start, remember)."""
+    return lhm_dialog(
+        root, "Start LibreHardwareMonitor?",
+        "LibreHardwareMonitor isn't running. congee needs it for temperatures, fan speeds, and GPU load, "
+        "clocks, power and memory. Everything else works without it.\n\n"
+        "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.",
+        "Start it")
+
+
+LHM_WINGET_ID = "LibreHardwareMonitor.LibreHardwareMonitor"
+LHM_RELEASES_URL = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases"
+LHM_WINGET_ARGS = ["install", "--id", LHM_WINGET_ID, "-e", "--source", "winget", "--accept-package-agreements",
+                   "--accept-source-agreements", "--disable-interactivity"]
+# 0 = installed; these two mean it was there already, which is fine too.
+WINGET_OK = {0, 0x8A15002B, 0x8A150061}  # no upgrade available, already installed
+
+
+def winget_exe() -> str | None:
+    """winget.exe (the App Installer alias), or None if it isn't there."""
+    p = os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Microsoft\WindowsApps\winget.exe")
+    return p if os.path.isfile(p) else None
+
+
+def ask_install_lhm(root, have_winget: bool) -> tuple[bool, bool]:
+    """'Install LibreHardwareMonitor?' dialog. Returns (install, remember). Without winget the
+    yes button opens LHM's download page instead."""
+    return lhm_dialog(
+        root, "Install LibreHardwareMonitor?",
+        "LibreHardwareMonitor isn't installed. congee needs it for temperatures, fan speeds, and GPU load, "
+        "clocks, power and memory. Everything else works without it. It's free and open source.\n\n" +
+        ("congee can install it for you with winget (Windows' package manager) and set it up to share its "
+         "sensors with congee. It needs administrator rights to read the hardware sensors, so Windows will "
+         "ask for permission when it starts." if have_winget else
+         "winget (Windows' package manager) isn't available to install it automatically. You can download it "
+         "from its GitHub releases page, unzip it, and run LibreHardwareMonitor.exe as administrator. Turn on "
+         "Options > Remote Web Server > Run so congee can read it."),
+        "Install" if have_winget else "Open download page")
+
+
+def ensure_lhm_web_server_config(exe: str):
+    """Write LibreHardwareMonitor.config next to the exe, if there isn't one, so it runs its web
+    server on port 8085 (what congee reads) and starts/closes to the tray. Same as setup."""
+    cfg = os.path.join(os.path.dirname(exe), "LibreHardwareMonitor.config")
+    if os.path.exists(cfg):
+        return
+    try:
+        with open(cfg, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('<?xml version="1.0" encoding="utf-8"?>\n'
+                    "<configuration>\n"
+                    "  <appSettings>\n"
+                    '    <add key="runWebServerMenuItem" value="true" />\n'
+                    '    <add key="listenerPort" value="8085" />\n'
+                    '    <add key="startMinMenuItem" value="true" />\n'
+                    '    <add key="minTrayMenuItem" value="true" />\n'
+                    '    <add key="minCloseMenuItem" value="true" />\n'
+                    "  </appSettings>\n"
+                    "</configuration>\n")
+        Log.write(f"wrote {cfg} (web server on port 8085)")
+    except OSError as e:
+        Log.write(f"couldn't write {cfg}: {e}")
+
+
+def install_lhm(root, winget: str, done):
+    """Install LHM with winget, hidden, in a background thread while a small 'Installing...'
+    window shows. Calls done(exe) on the Tk thread; exe is None after showing why it failed."""
+    from tkinter import messagebox, ttk
+    Log.write("installing LibreHardwareMonitor with winget")
+    win = tk.Toplevel(root)
+    win.title("congee")
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    frame = tk.Frame(win, padx=20, pady=18)
+    frame.pack()
+    tk.Label(frame, text="Installing LibreHardwareMonitor...", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+    bar = ttk.Progressbar(frame, mode="indeterminate", length=360)
+    bar.pack()
+    bar.start(12)
+    tk.Label(frame, text="This usually takes under a minute.", fg="gray", font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+    center(win)
+    result = {}
+
+    def work():
+        try:
+            p = subprocess.run([winget] + LHM_WINGET_ARGS, capture_output=True, text=True, errors="replace",
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            result["code"], result["out"] = p.returncode & 0xFFFFFFFF, (p.stdout or "") + (p.stderr or "")
+        except OSError as e:
+            result["code"], result["out"] = -1, str(e)
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+
+    def poll():
+        if t.is_alive():
+            root.after(250, poll)
+            return
+        win.destroy()
+        code, out = result["code"], result["out"]
+        last = next((ln.strip() for ln in reversed(out.splitlines()) if any(c.isalpha() for c in ln)), "")
+        ok = code in WINGET_OK
+        exe = find_lhm_exe()
+        if ok and exe:
+            Log.write(f"installed LibreHardwareMonitor: {exe}")
+            ensure_lhm_web_server_config(exe)
+            done(exe)
+            return
+        why = ("winget finished, but LibreHardwareMonitor.exe couldn't be found afterwards." if ok
+               else f"winget failed (exit code 0x{code & 0xFFFFFFFF:08X}).")
+        Log.write(f"LibreHardwareMonitor install failed: {why} {last}")
+        messagebox.showwarning(
+            "congee", f"Couldn't install LibreHardwareMonitor. {why}\n\n{last}\n\n"
+                      f"You can install it yourself from a terminal:\n    winget install --id {LHM_WINGET_ID}\n"
+                      f"or download it from:\n    {LHM_RELEASES_URL}", parent=root)
+        done(None)
+    root.after(250, poll)
 
 
 class Tray:
@@ -1966,29 +2084,47 @@ class Congee:
 
     def check_lhm(self):
         """If LibreHardwareMonitor isn't running, start it (start_lhm yes), offer to (ask), or not (no)."""
-        if lhm_running() or not lhm_is_local(self.settings["sensors_url"]):
+        # CONGEE_TEST_LHM_MISSING=1 pretends it isn't running or installed, to try the install prompt.
+        test = os.environ.get("CONGEE_TEST_LHM_MISSING") == "1"
+        if (lhm_running() and not test) or not lhm_is_local(self.settings["sensors_url"]):
             return
         mode = self.settings["start_lhm"].strip().lower()
         if mode in ("no", "false", "0", "off"):
             Log.write("LibreHardwareMonitor isn't running (start_lhm is no)")
             return
-        exe = find_lhm_exe()
-        if not exe:
-            Log.write("LibreHardwareMonitor isn't running and isn't installed")
+        exe = None if test else find_lhm_exe()
+        if not exe:  # not installed: offer to install it (always asks, even with start_lhm yes)
+            winget = winget_exe()
+            install, remember = ask_install_lhm(self.root, winget is not None)
+            if remember:
+                self.remember_start_lhm(install)
+            if not install:
+                Log.write('LibreHardwareMonitor isn\'t installed; install: "Not now"' + (" (remembered: start_lhm no)" if remember else ""))
+            elif not winget:
+                Log.write("LibreHardwareMonitor isn't installed and winget isn't available; opened the download page")
+                try:
+                    os.startfile(LHM_RELEASES_URL)
+                except OSError:
+                    pass
+            else:
+                install_lhm(self.root, winget, lambda exe_: exe_ and not lhm_running() and start_lhm(exe_))
             return
         start = True
         if not yes(mode):  # ask
             start, remember = ask_start_lhm(self.root)
             if remember:
-                try:
-                    set_setting(self.config_path, "start_lhm", "yes" if start else "no",
-                                "Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no")
-                except OSError:
-                    pass
+                self.remember_start_lhm(start)
             if not start:
                 Log.write('LibreHardwareMonitor not started: "Not now"' + (" (remembered: start_lhm no)" if remember else ""))
         if start:
             start_lhm(exe)
+
+    def remember_start_lhm(self, on: bool):
+        try:
+            set_setting(self.config_path, "start_lhm", "yes" if on else "no",
+                        "Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no")
+        except OSError:
+            pass
 
     def exit_from_menu(self):
         Log.stop_reason("Exit congee chosen from the menu")

@@ -79,7 +79,136 @@ static class Lhm
         (u.IsLoopback || u.Host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>"Start LibreHardwareMonitor?" dialog. Returns (start, remember).</summary>
-    public static (bool start, bool remember) Ask()
+    public static (bool start, bool remember) Ask() => Dialog(
+        "Start LibreHardwareMonitor?",
+        "LibreHardwareMonitor isn't running. congee needs it for temperatures, fan speeds, and GPU load, " +
+        "clocks, power and memory. Everything else works without it.\n\n" +
+        "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.",
+        "Start it");
+
+    // ---- installing it ----------------------------------------------------------------------
+
+    public const string WingetId = "LibreHardwareMonitor.LibreHardwareMonitor";
+    public const string ReleasesUrl = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases";
+    const string WingetArgs = "install --id " + WingetId + " -e --source winget --accept-package-agreements " +
+                              "--accept-source-agreements --disable-interactivity";
+
+    /// <summary>winget.exe (the App Installer alias), or null if it isn't there.</summary>
+    public static string? WingetExe()
+    {
+        string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WindowsApps\winget.exe");
+        return File.Exists(p) ? p : null;
+    }
+
+    /// <summary>"Install LibreHardwareMonitor?" dialog. Returns (install, remember). Without winget
+    /// the yes button opens LHM's download page instead.</summary>
+    public static (bool install, bool remember) AskInstall(bool haveWinget) => Dialog(
+        "Install LibreHardwareMonitor?",
+        "LibreHardwareMonitor isn't installed. congee needs it for temperatures, fan speeds, and GPU load, " +
+        "clocks, power and memory. Everything else works without it. It's free and open source.\n\n" +
+        (haveWinget
+            ? "congee can install it for you with winget (Windows' package manager) and set it up to share its " +
+              "sensors with congee. It needs administrator rights to read the hardware sensors, so Windows will " +
+              "ask for permission when it starts."
+            : "winget (Windows' package manager) isn't available to install it automatically. You can download it " +
+              "from its GitHub releases page, unzip it, and run LibreHardwareMonitor.exe as administrator. Turn on " +
+              "Options > Remote Web Server > Run so congee can read it."),
+        haveWinget ? "Install" : "Open download page");
+
+    /// <summary>Installs LHM with winget, hidden, while a small "Installing..." window shows.
+    /// Returns the exe, or null after showing why it failed.</summary>
+    public static async Task<string?> InstallAsync(string winget)
+    {
+        Log.Write("installing LibreHardwareMonitor with winget");
+        var progress = new Window
+        {
+            Title = "congee",
+            SizeToContent = SizeToContent.WidthAndHeight,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            Topmost = true,
+        };
+        var pp = new StackPanel { Margin = new Thickness(20), Width = 360 };
+        pp.Children.Add(new TextBlock { Text = "Installing LibreHardwareMonitor...", FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) });
+        pp.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 14 });
+        pp.Children.Add(new TextBlock { Text = "This usually takes under a minute.", Margin = new Thickness(0, 8, 0, 0), Foreground = System.Windows.Media.Brushes.Gray });
+        progress.Content = pp;
+        progress.Show();
+
+        int code = -1;
+        string output = "";
+        try
+        {
+            (code, output) = await Task.Run(() =>
+            {
+                var psi = new ProcessStartInfo(winget, WingetArgs)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+                using var p = Process.Start(psi)!;
+                var err = p.StandardError.ReadToEndAsync();
+                string o = p.StandardOutput.ReadToEnd();
+                p.WaitForExit();
+                return (p.ExitCode, o + err.Result);
+            });
+        }
+        catch (Exception e) { output = e.Message; }
+        progress.Close();
+
+        // 0 = installed; these two mean it was there already, which is fine too.
+        bool ok = code is 0 or unchecked((int)0x8A15002B) /* no upgrade available */ or unchecked((int)0x8A150061) /* already installed */;
+        string? exe = FindExe();
+        if (ok && exe != null)
+        {
+            Log.Write("installed LibreHardwareMonitor: " + exe);
+            EnsureWebServerConfig(exe);
+            return exe;
+        }
+        string why = ok ? "winget finished, but LibreHardwareMonitor.exe couldn't be found afterwards."
+                        : $"winget failed (exit code 0x{code:X8}).";
+        Log.Write("LibreHardwareMonitor install failed: " + why + " " + LastLine(output));
+        MessageBox.Show(
+            "Couldn't install LibreHardwareMonitor. " + why + "\n\n" + LastLine(output) +
+            "\n\nYou can install it yourself from a terminal:\n    winget install --id " + WingetId +
+            "\nor download it from:\n    " + ReleasesUrl,
+            "congee", MessageBoxButton.OK, MessageBoxImage.Warning);
+        return null;
+    }
+
+    static string LastLine(string output) =>
+        output.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && l.Any(char.IsLetter)).LastOrDefault() ?? "";
+
+    /// <summary>Writes LibreHardwareMonitor.config next to the exe, if there isn't one, so it runs
+    /// its web server on port 8085 (what congee reads) and starts/closes to the tray. Same as setup.</summary>
+    public static void EnsureWebServerConfig(string exe)
+    {
+        string cfg = Path.Combine(Path.GetDirectoryName(exe)!, "LibreHardwareMonitor.config");
+        if (File.Exists(cfg)) return;
+        try
+        {
+            File.WriteAllText(cfg,
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+                "<configuration>\r\n" +
+                "  <appSettings>\r\n" +
+                "    <add key=\"runWebServerMenuItem\" value=\"true\" />\r\n" +
+                "    <add key=\"listenerPort\" value=\"8085\" />\r\n" +
+                "    <add key=\"startMinMenuItem\" value=\"true\" />\r\n" +
+                "    <add key=\"minTrayMenuItem\" value=\"true\" />\r\n" +
+                "    <add key=\"minCloseMenuItem\" value=\"true\" />\r\n" +
+                "  </appSettings>\r\n" +
+                "</configuration>\r\n");
+            Log.Write("wrote " + cfg + " (web server on port 8085)");
+        }
+        catch (Exception e) { Log.Write("couldn't write " + cfg + ": " + e.Message); }
+    }
+
+    // ---- dialog -------------------------------------------------------------------------------
+
+    /// <summary>Heading, text, "Remember my choice", and yes / "Not now". Returns (yes, remember).</summary>
+    static (bool yes, bool remember) Dialog(string heading, string text, string yesLabel)
     {
         var win = new Window
         {
@@ -90,28 +219,22 @@ static class Lhm
             Topmost = true,
             ShowInTaskbar = true,
         };
-        bool start = false;
+        bool chosen = false;
         var remember = new CheckBox { Content = "Remember my choice", Margin = new Thickness(0, 14, 0, 0) };
-        var yes = new Button { Content = "Start it", IsDefault = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 8, 0) };
+        var yes = new Button { Content = yesLabel, IsDefault = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 8, 0) };
         var no = new Button { Content = "Not now", IsCancel = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3) };
-        yes.Click += (_, _) => { start = true; win.Close(); };
+        yes.Click += (_, _) => { chosen = true; win.Close(); };
         no.Click += (_, _) => win.Close();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
         buttons.Children.Add(yes);
         buttons.Children.Add(no);
         var panel = new StackPanel { Margin = new Thickness(20), MaxWidth = 440 };
-        panel.Children.Add(new TextBlock { Text = "Start LibreHardwareMonitor?", FontSize = 15, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) });
-        panel.Children.Add(new TextBlock
-        {
-            TextWrapping = TextWrapping.Wrap,
-            Text = "LibreHardwareMonitor isn't running. congee needs it for temperatures, fan speeds, and GPU load, " +
-                   "clocks, power and memory. Everything else works without it.\n\n" +
-                   "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.",
-        });
+        panel.Children.Add(new TextBlock { Text = heading, FontSize = 15, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) });
+        panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Text = text });
         panel.Children.Add(remember);
         panel.Children.Add(buttons);
         win.Content = panel;
         win.ShowDialog();
-        return (start, remember.IsChecked == true);
+        return (chosen, remember.IsChecked == true);
     }
 }
