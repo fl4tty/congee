@@ -72,7 +72,7 @@ public sealed class CongeeWindow : Window
             new("Reload config", Reload),
             new("Reset position", () => { userPos = null; geom = null; Render(); }),
             new("", null),
-            new("Exit congee", () => Application.Current.Shutdown()),
+            new("Exit congee", () => { Log.StopReason("Exit congee chosen from the menu"); Application.Current.Shutdown(); }),
         };
         var menu = new ContextMenu();
         foreach (var it in items)
@@ -140,6 +140,7 @@ public sealed class CongeeWindow : Window
             settings = new(Config.Defaults);
             text = "";
             configError = "Config error: " + e.Message;
+            Log.Once(configError);
         }
         try { mtime = File.GetLastWriteTimeUtc(configPath); } catch { }
         tokens = Config.Tokenize(text);
@@ -368,6 +369,7 @@ public sealed class CongeeWindow : Window
         }
         catch (Exception e)
         {
+            if (configError == null) Log.Once("display error: " + e);
             lines = [[new TextSeg("congee: " + e.Message, "#ff6060", settings.GetValueOrDefault("font", Config.Defaults["font"]))]];
         }
 

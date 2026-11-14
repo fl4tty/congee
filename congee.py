@@ -52,6 +52,98 @@ def find_config() -> str:
 KEY_COLOR = "#010101"  # pixels of exactly this colour become see-through
 IS_WINDOWS = sys.platform == "win32"
 
+
+class Log:
+    r"""congee.log next to the user's config (%APPDATA%\congee): starts and stops with the reason,
+    crashes, sleep/wake, lock/unlock and display errors, plus an hourly "still running" line, so
+    that after congee disappears you can tell what happened and roughly when. Shared with the
+    .NET edition (lines are tagged with the edition and process id). Kept under ~1 MB: the older
+    half is moved to congee.log.1. Logging never raises."""
+    PATH = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "congee", "congee.log")
+    MAX_BYTES = 1 << 20
+    STOP_MARKER = "stopped: "
+    _lock = threading.Lock()
+    _seen: set = set()
+    _reason: str | None = None
+    _stopped = False
+    _started = time.monotonic()
+
+    @classmethod
+    def write(cls, message: str) -> None:
+        with cls._lock:
+            try:
+                os.makedirs(os.path.dirname(cls.PATH), exist_ok=True)
+                if os.path.exists(cls.PATH) and os.path.getsize(cls.PATH) > cls.MAX_BYTES:
+                    os.replace(cls.PATH, cls.PATH + ".1")
+                stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(cls.PATH, "a", encoding="utf-8") as f:
+                    f.write(f"{stamp} [Python {os.getpid()}] {message}\n")
+            except OSError:
+                pass
+
+    @classmethod
+    def once(cls, message: str) -> None:
+        """Log a message once per run (for errors that would otherwise repeat every tick)."""
+        if message not in cls._seen:
+            cls._seen.add(message)
+            cls.write(message)
+
+    @classmethod
+    def stop_reason(cls, reason: str) -> None:
+        """Remember why congee is about to stop; the first reason given wins."""
+        if cls._reason is None:
+            cls._reason = reason
+
+    @classmethod
+    def uptime(cls) -> str:
+        t = int(time.monotonic() - cls._started)
+        return f"{t // 3600}h {t % 3600 // 60}m" if t >= 3600 else f"{t // 60}m {t % 60}s"
+
+    @classmethod
+    def started(cls, config_path: str) -> None:
+        cls._report_unclean_previous_run()
+        cls.write(f"started: congee (Python {platform.python_version()}), config {config_path}, Windows {platform.version()}")
+
+        def crash(kind, exc, tb):
+            import traceback
+            cls.stop_reason("crashed")
+            cls.write("CRASH: " + "".join(traceback.format_exception(kind, exc, tb)).rstrip())
+        sys.excepthook = crash
+        threading.excepthook = lambda a: cls.once(
+            f"error in thread {a.thread.name if a.thread else '?'}: {a.exc_type.__name__}: {a.exc_value}")
+
+    @classmethod
+    def stopped(cls, exit_code: int = 0) -> None:
+        """Write the "stopped:" line (once; on sign-out it's written early, as Windows may end the
+        process before the main loop returns)."""
+        if cls._stopped:
+            return
+        cls._stopped = True
+        cls.write(f"{cls.STOP_MARKER}{cls._reason or 'widget window closed'} (exit code {exit_code}, up {cls.uptime()})")
+
+    @classmethod
+    def _report_unclean_previous_run(cls) -> None:
+        """If the last run's final line isn't a "stopped:" line, it was killed or the PC lost
+        power: say so, with its last sign of life. Skipped when that process is still running."""
+        try:
+            with open(cls.PATH, "rb") as f:
+                f.seek(max(0, os.path.getsize(cls.PATH) - 4096))
+                lines = [ln.strip() for ln in f.read().decode("utf-8", "replace").splitlines() if ln.strip()]
+            m = re.match(r"^(\S+ \S+) \[(\S+) (\d+)\] (.*)$", lines[-1]) if lines else None
+            if not m or m.group(4).startswith(cls.STOP_MARKER):
+                return
+            prev = int(m.group(3))
+            try:
+                name = psutil.Process(prev).name().lower()
+                if name.startswith(("congee", "python")):
+                    return  # still running (e.g. the other edition)
+            except psutil.Error:
+                pass
+            cls.write(f"previous run ({m.group(2)} {prev}) ended without logging a stop: it was killed "
+                      f"(e.g. End task) or the PC lost power. Its last entry was at {m.group(1)}: {m.group(4)}")
+        except (OSError, ValueError):
+            pass
+
 DEFAULTS = {
     "alignment": "top_right",
     "gap_x": "20",
@@ -1485,6 +1577,10 @@ class Tray:
                 self.hicon = user32.LoadImageW(None, ICON_FILE, 1, size, size, 0x10)  # LR_LOADFROMFILE
             self.hicon = self.hicon or user32.LoadIconW(None, ctypes.c_void_p(32512))  # IDI_APPLICATION
             self._notify(0)  # NIM_ADD
+            try:  # WM_WTSSESSION_CHANGE on lock/unlock, for the log
+                ctypes.windll.wtsapi32.WTSRegisterSessionNotification(self.hwnd, 0)
+            except (OSError, AttributeError):
+                pass
         finally:
             ready.set()
         msg = wt.MSG()
@@ -1511,6 +1607,21 @@ class Tray:
             return 0
         if msg == self.taskbar_created:  # Explorer restarted: the old icon is gone
             self._notify(0)
+        elif msg == self.WM_CLOSE and not self.closing:  # setup, uninstall, stop-congee.ps1
+            Log.stop_reason("asked to close by another program (setup, uninstall or stop-congee.ps1)")
+        elif msg == 0x0016 and wparam:  # WM_ENDSESSION: Windows may end the process right after this
+            Log.stop_reason("Windows is signing out or shutting down")
+            Log.stopped(0)
+        elif msg == 0x0218:  # WM_POWERBROADCAST
+            if wparam == 4:  # PBT_APMSUSPEND
+                Log.write("PC going to sleep")
+            elif wparam == 0x12:  # PBT_APMRESUMEAUTOMATIC
+                Log.write("PC woke up")
+        elif msg == 0x02B1:  # WM_WTSSESSION_CHANGE
+            if wparam == 7:
+                Log.write("screen locked")
+            elif wparam == 8:
+                Log.write("screen unlocked")
         elif msg == self.WM_DESTROY:  # Exit, or another program sending WM_CLOSE: don't leave a dead icon
             if self.added:
                 self._notify(2)
@@ -1579,7 +1690,7 @@ class Congee:
             ("Reload config", self.reload),
             ("Reset position", self.reset_position),
             ("", None),
-            ("Exit congee", self.quit),
+            ("Exit congee", self.exit_from_menu),
         ]
         self.menu = tk.Menu(self.root, tearoff=0)
         for label, action in items:
@@ -1589,6 +1700,10 @@ class Congee:
                 self.menu.add_command(label=label() if callable(label) else label, command=action)
         self.canvas.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
+        # Tk prints callback errors to stderr, which pythonw throws away: log them instead
+        self.root.report_callback_exception = lambda kind, exc, tb: Log.once(
+            "error: " + "".join(__import__("traceback").format_exception(kind, exc, tb)).rstrip())
+        self.root.after(3600_000, self.heartbeat)
         name = os.path.basename(self.config_path)
         self.tray = None
         if IS_WINDOWS:
@@ -1613,6 +1728,7 @@ class Congee:
         except Exception as e:  # noqa: BLE001
             self.settings, text = dict(DEFAULTS), ""
             self.config_error = f"Config error: {e}"
+            Log.once(self.config_error)
         try:
             self.mtime = os.path.getmtime(self.config_path)
         except OSError:
@@ -1672,6 +1788,14 @@ class Congee:
             self.root.deiconify()
             self.root.update_idletasks()
             self.apply_window_styles()
+
+    def exit_from_menu(self):
+        Log.stop_reason("Exit congee chosen from the menu")
+        self.quit()
+
+    def heartbeat(self):
+        Log.write(f"still running (up {Log.uptime()})")
+        self.root.after(3600_000, self.heartbeat)
 
     def quit(self):
         if self.tray:
@@ -1861,6 +1985,9 @@ class Congee:
                 raise RuntimeError(self.config_error)
             lines = self.evaluator.build(self.tokens)
         except Exception as e:  # noqa: BLE001 - show errors on screen rather than vanish
+            if not self.config_error:
+                import traceback
+                Log.once("display error: " + "".join(traceback.format_exception(e)).rstrip())
             lines = [[Text(f"congee: {e}", "#ff6060", self.settings.get("font", DEFAULTS["font"]))]]
 
         s = self.settings
@@ -2068,7 +2195,9 @@ def main():
         return
 
     set_dpi_awareness()
+    Log.started(os.path.abspath(args.config))
     Congee(args.config).run()
+    Log.stopped(0)
 
 
 if __name__ == "__main__":

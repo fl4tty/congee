@@ -53,11 +53,19 @@ public static class Program
             return RunCli(mode, config);
         }
 
+        Log.Started(Path.GetFullPath(config));
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        app.SessionEnding += (_, e) =>
+        {
+            Log.StopReason($"Windows is {(e.ReasonSessionEnding == ReasonSessionEnding.Shutdown ? "shutting down" : "signing out")}");
+            Log.Stopped(0);
+        };
         var win = new CongeeWindow(config);
         app.MainWindow = win;
         win.Show();
-        return app.Run();
+        int code = app.Run();
+        Log.Stopped(code);
+        return code;
     }
 
     static int RunCli(string mode, string config)

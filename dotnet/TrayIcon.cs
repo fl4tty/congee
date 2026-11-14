@@ -75,6 +75,11 @@ sealed class TrayIcon : IDisposable
         {
             Add();  // Explorer restarted: the old icon is gone
         }
+        else if (msg == 0x0010 /* WM_CLOSE */)
+        {
+            // Setup, uninstall and stop-congee.ps1 close congee this way (then WM_DESTROY follows)
+            Log.StopReason("asked to close by another program (setup, uninstall or stop-congee.ps1)");
+        }
         else if (msg == 0x0002 /* WM_DESTROY */)
         {
             Remove();  // e.g. taskkill sends WM_CLOSE to this window too: don't leave a dead icon

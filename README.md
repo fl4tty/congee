@@ -347,6 +347,26 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | Can't right-click it any more | `click_through yes` is set. Use the tray icon, or change it to `no` (tray icon → **Edit config**) |
 | Python edition stopped starting after moving the folder | Delete `.venv` and redo the [Python install step](#python-edition) |
 | `congee.exe` says .NET is missing | Install the .NET 10 Desktop Runtime: `winget install Microsoft.DotNet.DesktopRuntime.10` |
+| congee disappeared and you don't know why | Open `congee.log` in `%APPDATA%\congee` (tray icon → **Open config folder**). See [Log file](#log-file) |
+
+### Log file
+
+Both editions write `%APPDATA%\congee\congee.log`, so you can tell why congee stopped and roughly when.
+Each line has the time, the edition and its process id. It records:
+
+- **Starts**, with the version and the config file used.
+- **Stops**, with the reason: **Exit congee** from the menu, closed by another program (setup, uninstall or
+  `stop-congee.ps1`), Windows signing out or shutting down, or the widget window closing.
+- **Crashes**, with the full error.
+- **Sleep and wake, and screen lock and unlock.**
+- **Config and display errors**, once each per run.
+- A **still running** line every hour.
+
+If congee is killed outright (Task Manager's **End task**, or the PC losing power), it can't log a stop. The next
+time congee starts, it notes that the previous run ended without logging a stop, with that run's last entry.
+Thanks to the hourly line, that tells you when it was last seen alive, to within an hour.
+
+The log is kept under about 1 MB; older entries move to `congee.log.1`.
 
 **Known limits:**
 - `freq` often shows the CPU's base clock, because that's what Windows reports, not the live boost clock.
@@ -381,6 +401,7 @@ congee\
     ├── Stats.cs           CPU, memory, disk, network, process stats
     ├── Sensors.cs         LibreHardwareMonitor sensors, GPU selection
     ├── Hardware.cs        Drive list, GPU driver versions
+    ├── Log.cs             congee.log: starts, stops and their reasons, crashes
     ├── Strftime.cs        ${time} formatting
     ├── Native.cs          Windows API calls
     └── publish\congee.exe Built program (after dotnet publish)
