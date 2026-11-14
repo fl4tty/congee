@@ -4,7 +4,7 @@ A [conky](https://github.com/brndnmtthws/conky)-style system monitor for Windows
 It draws live system stats as text, bars and graphs straight onto your desktop: clock, CPU, GPU, memory, disks, network,
 top processes, temperatures, fan speeds and battery. A plain-text config file controls everything, just like conky.
 
-<p align="center"><img src="docs/screenshot.png" alt="congee showing clock, CPU, GPU, temperatures, fans, memory, disk, network and top processes" width="360"></p>
+<p align="center"><img src="docs/screenshot.png" alt="congee showing clock, CPU, GPU, temperatures, fans, memory, every drive with its read/write, network and top processes" width="360"></p>
 
 - [Editions: Python or .NET](#editions-python-or-net)
 - [Requirements](#requirements)
