@@ -10,7 +10,7 @@
 #          GPU driver line; every drive (with its own read/write) instead of only C:
 #   1.2.2  logging setting (yes; the tray menu's Logging item switches it)
 #   1.2.3  rendering setting (software: the .NET edition draws with the CPU, using less memory)
-#   1.2.4  congee's own sensor service replaces LibreHardwareMonitor: the start_lhm / stop_lhm
+#   1.3.0  congee's own sensor service replaces LibreHardwareMonitor: the start_lhm / stop_lhm
 #          settings (and their comments) are removed, and the no-sensors hint no longer says to
 #          start LibreHardwareMonitor
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))

@@ -13,7 +13,7 @@
     <AssemblyName>congee-sensors</AssemblyName>
     <RootNamespace>CongeeSensors</RootNamespace>
     <ApplicationIcon>..\congee.ico</ApplicationIcon>
-    <Version>1.2.4</Version>
+    <Version>1.3.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Background service: favour a small, steady footprint over GC throughput -->

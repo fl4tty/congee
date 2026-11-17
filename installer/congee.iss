@@ -23,7 +23,7 @@
 #else
   #define AppName "congee"
 #endif
-#define AppVersion "1.2.4"
+#define AppVersion "1.3.0"
 
 [Setup]
 #ifdef TEST_INSTANCE

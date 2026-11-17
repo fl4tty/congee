@@ -296,7 +296,7 @@ doesn't run as administrator, so a small helper does that part: the **congee sen
 - To install or remove it by hand, from an administrator terminal:
   `"%LOCALAPPDATA%\Programs\congee\sensors\congee-sensors.exe" --install` or `--uninstall`.
 
-congee (versions before 1.2.4) used the LibreHardwareMonitor app for this. It doesn't any more: you can close or
+congee (versions before 1.3.0) used the LibreHardwareMonitor app for this. It doesn't any more: you can close or
 uninstall LibreHardwareMonitor unless you use it for something else. The two can run side by side.
 
 ### Sensors in your config
