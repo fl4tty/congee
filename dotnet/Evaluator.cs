@@ -300,6 +300,9 @@ public sealed class Evaluator(Stats st, Dictionary<string, string> cfg, double s
                 double v = Deg(gs.Value, type);
                 return Math.Abs(v) >= 100 || v == Math.Floor(v) ? F0(v) : v.ToString("0.0");
             }
+            case "sensors_status":
+                st.Sensors.Get();
+                return st.Sensors.Ok ? "ok" : st.Sensors.Starting ? "finding hardware…" : "no sensor data (see README)";
             case "temp" or "fan":
                 var s = st.Sensors.Find(name == "temp" ? "temperature" : "fan", a);
                 return s is null ? "N/A" : F0(Deg(s.Value, s.Type));

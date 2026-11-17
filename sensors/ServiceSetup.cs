@@ -15,6 +15,12 @@ static class ServiceSetup
     static string Target => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "congee", "sensors");
     static string TargetExe => Path.Combine(Target, "congee-sensors.exe");
 
+    // Windows' default service permissions, plus start (RP) and stop (WP) for signed-in users (IU):
+    // congee starts the service when it opens and stops it on exit, without admin rights. Users
+    // still can't change, reconfigure or remove it.
+    const string Sddl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" +
+                        "(A;;CCLCSWRPWPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
+
     static bool IsAdmin() => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
     static ServiceController? Find() =>
@@ -39,13 +45,14 @@ static class ServiceSetup
             using (var existing = Find())
             {
                 if (existing == null)
-                    Sc($"create {Program.ServiceName} binPath= \"\\\"{TargetExe}\\\"\" start= auto DisplayName= \"congee sensors\"");
+                    Sc($"create {Program.ServiceName} binPath= \"\\\"{TargetExe}\\\"\" start= demand DisplayName= \"congee sensors\"");
                 else
-                    Sc($"config {Program.ServiceName} binPath= \"\\\"{TargetExe}\\\"\" start= auto DisplayName= \"congee sensors\"");
+                    Sc($"config {Program.ServiceName} binPath= \"\\\"{TargetExe}\\\"\" start= demand DisplayName= \"congee sensors\"");
             }
             Sc($"description {Program.ServiceName} \"Reads temperatures, fans and GPU stats for congee (LibreHardwareMonitorLib), " +
                $"served to this PC only on 127.0.0.1:{Program.Port}.\"");
             Sc($"failure {Program.ServiceName} reset= 86400 actions= restart/5000/restart/30000//");
+            Sc($"sdset {Program.ServiceName} {Sddl}");
 
             using var svc = Find() ?? throw new InvalidOperationException("the service wasn't created");
             svc.Start();

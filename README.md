@@ -161,7 +161,7 @@ Press `Win+R`, type `shell:startup`, press Enter, and put a shortcut in that fol
 - Python edition: `start.bat`
 - .NET edition: `dotnet\publish\congee.exe`
 
-The sensor service starts with Windows on its own.
+congee starts the sensor service itself when it opens.
 
 ## Run
 
@@ -281,18 +281,21 @@ the rest of the line. Graphs also take two colours for a gradient: `${cpugraph 3
 Windows only lets programs read temperatures and fan speeds with administrator rights and a hardware driver. congee
 doesn't run as administrator, so a small helper does that part: the **congee sensor service** (`congee-sensors`).
 
-- It's a Windows service, so it has no window or tray icon and starts with Windows. Setup installs it once, with one
-  admin prompt, into `C:\Program Files\congee\sensors` (where only administrators can change it, because it runs as
-  the system account).
+- It's a Windows service, so it has no window or tray icon. Setup installs it once, with one admin prompt, into
+  `C:\Program Files\congee\sensors` (where only administrators can change it, because it runs as the system account).
+- It runs only while congee does: congee starts it when it opens and stops it when you exit congee, with no admin
+  prompt (setup lets signed-in users start and stop this one service, but not change or remove it). For the first few
+  seconds after congee opens, while the service finds the hardware, the widget says *finding hardware…* where the
+  temperatures go.
 - It uses [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), the sensor engine
   inside LibreHardwareMonitor, and its [PawnIO](https://pawnio.eu/) driver for CPU and motherboard sensors. Without
   PawnIO it still reads GPU stats, but not CPU temperatures or motherboard fans.
 - It serves the readings only to this PC, on `http://127.0.0.1:8086/data.json`, in the same format as
   LibreHardwareMonitor's web server, so sensor names and paths are the same as with LHM.
-- It only reads the hardware when congee asks (at most about once a second), so with congee closed it sits idle. It
-  uses about 100 MB of memory, less than half of what the LibreHardwareMonitor app uses.
+- It only reads the hardware when congee asks (at most about once a second). While running it uses about 120 MB of
+  memory, about half of what the LibreHardwareMonitor app uses.
 - Check it works: `congee.exe --sensors` (or `.venv\Scripts\python congee.py --sensors`) lists every sensor and the
-  GPUs found. In **Services** (`services.msc`) it's listed as *congee sensors*.
+  GPUs found. With congee closed it starts the service for this and stops it again after. In **Services** (`services.msc`) it's listed as *congee sensors*.
 - To install or remove it by hand, from an administrator terminal:
   `"%LOCALAPPDATA%\Programs\congee\sensors\congee-sensors.exe" --install` or `--uninstall`.
 
@@ -373,7 +376,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | Battery | `battery_percent`, `battery_status`, `battery_time`, `battery_bar` |
 | Commands | `exec command` (every update), `execi seconds command`. Run in the background through `cmd.exe` |
 | Layout | `color [c]`, `color0`–`color9`, `font [spec]`, `alignr`, `alignc`, `goto X`, `offset X`, `hr [h]`, `stippled_hr [h]` |
-| Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_gpu_driver`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested |
+| Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_gpu_driver`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested. `sensors_status` says why there's no sensor data: `finding hardware…` while the sensor service starts, else `no sensor data (see README)` (`ok` when there is data) |
 
 ¹ Needs the sensor service running; otherwise shows `N/A`. Temperatures are in °C, or °F with `temperature_unit fahrenheit`.
 
@@ -384,7 +387,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | How do I stop it? | Tray icon → **Exit congee**. If you don't see the icon, click the **^** next to the clock |
 | Nothing appears | Look for the tray icon: if it's there, try its **Show widget** and **Reset position**. Otherwise run `--once` from a terminal to see errors |
 | Two widgets drawn on top of each other | Both editions, or two copies, are running with the same config. Each has a tray icon: **Exit congee** on one |
-| Temperatures/fans show `N/A`, or "no sensor data" | Run `--sensors` to see what's wrong. The sensor service may not be installed or running (check *congee sensors* in `services.msc`, or run setup again and tick it). CPU temperatures and motherboard fans also need PawnIO |
+| Temperatures/fans show `N/A`, or "no sensor data" | Run `--sensors` to see what's wrong. The sensor service may not be installed (check *congee sensors* in `services.msc`, or run setup again and tick it). If congee's log says it's "not allowed to start or stop it", the service was set up by congee 1.3.0 or earlier (or the admin prompt was declined when setup tried to update it): run congee's setup again, even the version you already have, and approve the admin prompt. Until then the service starts with Windows and keeps running, so temperatures still work. CPU temperatures and motherboard fans also need PawnIO |
 | GPU section missing | `--sensors` lists the GPUs found. Check the `gpu` setting matches one, or set it back to `auto` |
 | Wrong GPU on a laptop | Set `gpu` to part of the card's name (e.g. `gpu GeForce`) or its number from `--sensors` |
 | Can't right-click it any more | `click_through yes` is set. Use the tray icon, or change it to `no` (tray icon → **Edit config**) |

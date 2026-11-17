@@ -119,11 +119,22 @@ public static class Program
                 var settings = File.Exists(config) ? Config.Parse(config).settings : new(Config.Defaults);
                 var sens = new Sensors();
                 sens.Configure(settings["sensors_url"], 1.0);
-                sens.RefreshNow();
+                // With congee closed the service is stopped: start it for this, and stop it again after.
+                bool started = sens.StartService();
+                if (started) Console.WriteLine("Started the sensor service, finding hardware...");
+                try
+                {
+                    sens.WaitForData(30);
+                }
+                finally
+                {
+                    if (started) sens.StopService();
+                }
                 if (!sens.Ok)
                 {
                     Console.WriteLine($"Can't read sensors at {sens.Url}: {sens.Error}");
-                    Console.WriteLine("Is the congee sensor service installed and running? Check \"congee sensors\" in services.msc, " +
+                    if (sens.StartProblem is { } why) Console.WriteLine($"Starting the congee sensor service: {why}.");
+                    Console.WriteLine("Is the congee sensor service installed? Check \"congee sensors\" in services.msc, " +
                                       "or run congee's setup again and tick it.");
                     return 1;
                 }
@@ -146,7 +157,9 @@ public static class Program
                 var (settings, text) = Config.Parse(config);
                 var st = new Stats();
                 st.Sensors.Configure(settings["sensors_url"], 1.0);
-                st.Sensors.RefreshNow();
+                bool started = st.Sensors.StartService();
+                try { st.Sensors.WaitForData(30); }
+                finally { if (started) st.Sensors.StopService(); }
                 st.WaitForDrives(TimeSpan.FromSeconds(15));  // include network/DVD drives, scanned in the background
                 var ev = new Evaluator(st, settings, 1.0, Config.IsHex6);
                 var tokens = Config.Tokenize(text);

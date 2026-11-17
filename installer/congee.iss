@@ -10,6 +10,8 @@
 ;   congee. It runs as a Windows service, so it is copied to Program Files and installed there
 ;   by "congee-sensors.exe --install", which Windows asks administrator permission for; that is
 ;   the only part of setup that needs admin. Uninstalling congee removes it the same way.
+;   It's a manual-start service that signed-in users may start and stop: congee starts it when
+;   it opens and stops it on exit, so it only runs (and uses memory) while congee does.
 ; - congee no longer uses LibreHardwareMonitor. Upgrading from an older congee offers to uninstall it
 ;   (OfferToRemoveLhm); setup never offers to install it. The uninstaller still offers to remove a
 ;   copy that an older congee setup installed (recorded under InstalledDeps).
@@ -23,7 +25,7 @@
 #else
   #define AppName "congee"
 #endif
-#define AppVersion "1.3.0"
+#define AppVersion "1.3.1"
 
 [Setup]
 #ifdef TEST_INSTANCE
@@ -116,7 +118,7 @@ Type: filesandordirs; Name: "{app}\python\.venv"
 Type: filesandordirs; Name: "{app}\python\__pycache__"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nTemperatures, fans and GPU stats come from the congee sensor service, which starts with Windows.
+FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nTemperatures, fans and GPU stats come from the congee sensor service, which congee starts when it opens and stops when you exit it.
 
 [Code]
 const

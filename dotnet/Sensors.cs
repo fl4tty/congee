@@ -39,6 +39,61 @@ public sealed class Sensors
     public bool Ok { get; private set; }
     public string Error { get; private set; } = "not polled yet";
 
+    double startedAt = -1e9;  // when congee started the service
+    bool startingUp;          // the service answered "starting up" (still finding the hardware)
+    const double StartSeconds = 30;
+
+    /// <summary>The service is starting and still finding the hardware: shown as "finding hardware".</summary>
+    public bool Starting => !Ok && (startingUp || Now - startedAt < StartSeconds);
+
+    /// <summary>Whether this reads congee's own service (not a custom sensors_url), which congee
+    /// then starts and stops with itself.</summary>
+    public bool UsesService => Url == ServiceUrl;
+
+    /// <summary>Why the service couldn't be started, if it couldn't.</summary>
+    public string? StartProblem { get; private set; }
+
+    /// <summary>Starts the sensor service if it's stopped. True if this call started it.</summary>
+    public bool StartService()
+    {
+        if (!UsesService) return false;
+        startedAt = Now;  // show "finding hardware" straight away, not "no sensor data" first
+        string? why = ServiceControl.Start();
+        StartProblem = why is null or "running" ? null : why;
+        if (why == null)
+        {
+            if (Log.IsStarted) Log.Write("sensors: started the sensor service");
+            return true;
+        }
+        if (why != "running")
+        {
+            startedAt = -1e9;
+            if (Log.IsStarted) Log.Write("sensors: can't start the sensor service: " + why);
+        }
+        return false;
+    }
+
+    /// <summary>Stops the sensor service (congee is exiting).</summary>
+    public void StopService()
+    {
+        if (!UsesService) return;
+        string? why = ServiceControl.Stop();
+        if (Log.IsStarted && why != "not running")
+            Log.Write(why == null ? "sensors: stopped the sensor service" : "sensors: can't stop the sensor service: " + why);
+    }
+
+    /// <summary>Reads now, and keeps trying while the service is still starting (up to maxSeconds).</summary>
+    public void WaitForData(double maxSeconds)
+    {
+        double until = Now + maxSeconds;
+        RefreshNow();
+        while (!Ok && Starting && Now < until)
+        {
+            Thread.Sleep(500);
+            RefreshNow();
+        }
+    }
+
     public void Configure(string url, double updateInterval)
     {
         url = url.Trim();
@@ -86,6 +141,8 @@ public sealed class Sensors
             items = seen.Values.Select(v => v.s).ToList();
             Ok = true;
             Error = "";
+            startingUp = false;
+            startedAt = -1e9;
             LogState(true);
         }
         catch (Exception e)
@@ -93,6 +150,7 @@ public sealed class Sensors
             items = [];
             Ok = false;
             Error = e.Message;
+            startingUp = e is HttpRequestException { StatusCode: System.Net.HttpStatusCode.ServiceUnavailable };
             LogState(false);
         }
         finally
@@ -105,7 +163,7 @@ public sealed class Sensors
     /// which never logs a start: a line from it would look like a run that never stopped.</summary>
     void LogState(bool ok)
     {
-        if (wasOk == ok || !Log.IsStarted) return;
+        if (wasOk == ok || !Log.IsStarted || (!ok && Starting)) return;
         wasOk = ok;
         Log.Write(ok ? "sensors: reading " + Url
                      : "sensors: no data from " + Url + " (" + Error + "). Is the congee sensor service installed and running?");

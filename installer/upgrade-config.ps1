@@ -13,6 +13,8 @@
 #   1.3.0  congee's own sensor service replaces LibreHardwareMonitor: the start_lhm / stop_lhm
 #          settings (and their comments) are removed, and the no-sensors hint no longer says to
 #          start LibreHardwareMonitor
+#   1.3.1  the no-sensors line shows ${sensors_status}: "finding hardware..." while the sensor
+#          service starts (congee now starts it on launch and stops it on exit), else the hint
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -87,10 +89,13 @@ if ($m.Success) {
 }
 
 # --- no-sensors hint: congee's sensor service replaces LibreHardwareMonitor ------------------
-$oldHint = 'Temps/fans: start LibreHardwareMonitor (as admin)'
-if ($text.Contains($oldHint)) {
-    $text = $text.Replace($oldHint, 'Temps/fans: no sensor data (see README)')
-    $changes.Add('the no-sensors hint now points to the README instead of LibreHardwareMonitor')
+# congee 1.3.1 shows ${sensors_status} there instead: "finding hardware..." while the service starts.
+$newHint = 'Temps/fans: ${sensors_status}'
+foreach ($oldHint in @('Temps/fans: start LibreHardwareMonitor (as admin)', 'Temps/fans: no sensor data (see README)')) {
+    if ($text.Contains($oldHint)) {
+        $text = $text.Replace($oldHint, $newHint)
+        $changes.Add('the no-sensors line now says "finding hardware" while the sensor service starts')
+    }
 }
 
 # --- ${temp_unit} instead of a fixed degrees-C sign after temperature variables -------------

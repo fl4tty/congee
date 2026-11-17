@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\congee.ico</ApplicationIcon>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>1.3.0</Version>
+    <Version>1.3.1</Version>
     <!-- Always-on widget: favour a small, steady footprint over GC throughput -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>false</TieredPGO>

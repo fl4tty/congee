@@ -422,6 +422,77 @@ DEVICE_WIDGETS = {  # widget -> the variable it draws
 
 
 SERVICE_URL = "http://127.0.0.1:8086/data.json"  # congee-sensors, the Windows service setup installs
+SERVICE_NAME = "congee-sensors"
+
+
+class _ServiceStatus(ctypes.Structure):
+    _fields_ = [(n, wt.DWORD) for n in ("type", "state", "accepted", "exit", "specific", "checkpoint", "wait_hint")]
+
+
+def _with_service(access: int, fn):
+    """Runs fn(handle) on the sensor service; returns its result, or why the service couldn't be opened."""
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    adv.OpenSCManagerW.restype = adv.OpenServiceW.restype = ctypes.c_void_p
+    adv.OpenSCManagerW.argtypes = [wt.LPCWSTR, wt.LPCWSTR, wt.DWORD]
+    adv.OpenServiceW.argtypes = [ctypes.c_void_p, wt.LPCWSTR, wt.DWORD]
+    adv.CloseServiceHandle.argtypes = [ctypes.c_void_p]
+    adv.QueryServiceStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ServiceStatus)]
+    adv.StartServiceW.argtypes = [ctypes.c_void_p, wt.DWORD, ctypes.c_void_p]
+    adv.ControlService.argtypes = [ctypes.c_void_p, wt.DWORD, ctypes.POINTER(_ServiceStatus)]
+    scm = adv.OpenSCManagerW(None, None, 0x1)  # SC_MANAGER_CONNECT
+    if not scm:
+        return f"can't reach the service manager ({ctypes.get_last_error()})"
+    try:
+        svc = adv.OpenServiceW(scm, SERVICE_NAME, access)
+        if not svc:
+            err = ctypes.get_last_error()
+            return {1060: "the service isn't installed",
+                    5: "not allowed to start or stop it: run congee's setup again and approve the admin prompt, so it can update the service"}.get(
+                err, f"can't open the service ({err})")
+        try:
+            return fn(adv, svc)
+        finally:
+            adv.CloseServiceHandle(svc)
+    finally:
+        adv.CloseServiceHandle(scm)
+
+
+def _service_state(adv, svc) -> int:
+    st = _ServiceStatus()
+    return st.state if adv.QueryServiceStatus(svc, ctypes.byref(st)) else 0
+
+
+def start_sensor_service() -> str | None:
+    """Starts the sensor service if it's stopped (waiting out a stop still in progress first). Returns None
+    if this call started it, "running" if it already was, else why not. Setup installs the service as
+    manual-start and lets signed-in users start and stop it, so this needs no admin rights. Services
+    installed by congee 1.3.0 start with Windows and don't allow it: then this fails harmlessly."""
+    def go(adv, svc):
+        deadline = time.monotonic() + 20
+        while _service_state(adv, svc) == 3 and time.monotonic() < deadline:  # STOP_PENDING
+            time.sleep(0.25)
+        if _service_state(adv, svc) != 1:  # not STOPPED
+            return "running"
+        if adv.StartServiceW(svc, 0, None):
+            return None
+        err = ctypes.get_last_error()
+        return "running" if err == 1056 else f"couldn't start it ({err})"
+    return _with_service(0x4 | 0x10, go)  # QUERY_STATUS | START
+
+
+def stop_sensor_service() -> str | None:
+    """Asks the sensor service to stop. Returns None if asked, else why not."""
+    def go(adv, svc):
+        state = _service_state(adv, svc)
+        if state in (1, 3):  # STOPPED, STOP_PENDING
+            return "not running"
+        deadline = time.monotonic() + 10
+        while state == 2 and time.monotonic() < deadline:  # START_PENDING: can't stop it mid-start
+            time.sleep(0.25)
+            state = _service_state(adv, svc)
+        st = _ServiceStatus()
+        return None if adv.ControlService(svc, 1, ctypes.byref(st)) else f"couldn't stop it ({ctypes.get_last_error()})"
+    return _with_service(0x4 | 0x20, go)  # QUERY_STATUS | STOP
 
 
 class Sensors:
@@ -440,8 +511,55 @@ class Sensors:
         self.last = -1e9
         self.busy = False
         self.seen: dict[tuple, tuple[dict, float]] = {}
+        self.started_at = -1e9   # when congee started the service
+        self.starting_up = False  # the service answered "starting up" (still finding the hardware)
+        self.start_problem: str | None = None
 
     STALE_SECONDS = 10
+    START_SECONDS = 30
+
+    @property
+    def starting(self) -> bool:
+        """The service is starting and still finding the hardware: shown as "finding hardware"."""
+        return not self.ok and (self.starting_up or time.monotonic() - self.started_at < self.START_SECONDS)
+
+    @property
+    def uses_service(self) -> bool:
+        """Reading congee's own service (not a custom sensors_url), which congee starts and stops with itself."""
+        return self.url == SERVICE_URL
+
+    def start_service(self) -> bool:
+        """Starts the sensor service if it's stopped. True if this call started it."""
+        if not self.uses_service:
+            return False
+        self.started_at = time.monotonic()  # show "finding hardware" straight away
+        why = start_sensor_service()
+        self.start_problem = None if why in (None, "running") else why
+        if why is None:
+            if Log.is_started:
+                Log.write("sensors: started the sensor service")
+            return True
+        if why != "running":
+            self.started_at = -1e9
+            if Log.is_started:
+                Log.write(f"sensors: can't start the sensor service: {why}")
+        return False
+
+    def stop_service(self):
+        """Stops the sensor service (congee is exiting)."""
+        if not self.uses_service:
+            return
+        why = stop_sensor_service()
+        if Log.is_started and why != "not running":
+            Log.write("sensors: stopped the sensor service" if why is None else f"sensors: can't stop the sensor service: {why}")
+
+    def wait_for_data(self, max_seconds: float):
+        """Reads now, and keeps trying while the service is still starting (up to max_seconds)."""
+        until = time.monotonic() + max_seconds
+        self.refresh_now()
+        while not self.ok and self.starting and time.monotonic() < until:
+            time.sleep(0.5)
+            self.refresh_now()
 
     def configure(self, url: str, interval: float):
         url = url.strip()
@@ -478,9 +596,11 @@ class Sensors:
                 self.seen[(it["type"], it["path"])] = (it, now)
             self.seen = {k: v for k, v in self.seen.items() if now - v[1] <= self.STALE_SECONDS}
             self.items, self.ok, self.error = [it for it, _ in self.seen.values()], True, ""
+            self.starting_up, self.started_at = False, -1e9
             self._log_state(True)
         except Exception as e:  # noqa: BLE001 - service not running, port closed, etc.
             self.items, self.ok, self.error = [], False, str(e)
+            self.starting_up = getattr(e, "code", None) == 503  # urllib's HTTPError: "starting up"
             self._log_state(False)
         finally:
             self.busy = False
@@ -488,7 +608,7 @@ class Sensors:
     def _log_state(self, ok: bool):
         """Logs when sensor data starts or stops arriving (not every poll). Not from --sensors, which
         never logs a start: a line from it would look like a run that never stopped."""
-        if self.was_ok == ok or not Log.is_started:
+        if self.was_ok == ok or not Log.is_started or (not ok and self.starting):
             return
         self.was_ok = ok
         Log.write(f"sensors: reading {self.url}" if ok else
@@ -1351,6 +1471,10 @@ class Evaluator:
                 return "N/A"
             v = self.deg(s["value"], stype.lower())
             return f"{v:.0f}" if abs(v) >= 100 or v == int(v) else f"{v:.1f}"
+        if name == "sensors_status":
+            sens = self.st.sensors
+            sens.get()
+            return "ok" if sens.ok else "finding hardware\u2026" if sens.starting else "no sensor data (see README)"
         if name in ("temp", "fan"):
             s = self.sensor("temperature" if name == "temp" else "fan", a)
             return f"{self.deg(s['value'], 'temperature' if name == 'temp' else 'fan'):.0f}" if s else "N/A"
@@ -2174,11 +2298,15 @@ class Congee:
             y += lh
 
     def run(self):
+        # The sensor service runs only while congee does: started now that the config is read (it may
+        # name another sensors_url), stopped on exit. Starting can wait for a stop still in progress.
+        threading.Thread(target=self.stats.sensors.start_service, daemon=True).start()
         try:
             self.root.mainloop()
         finally:
             if self.tray:  # e.g. Ctrl+C in a console: don't leave a dead icon behind
                 self.tray.remove()
+            self.stats.sensors.stop_service()
 
 
 # --------------------------------------------------------------------------
@@ -2241,10 +2369,20 @@ def main():
             settings = dict(DEFAULTS)
         sens = Sensors()
         sens.configure(settings["sensors_url"], 1.0)
-        sens.refresh_now()
+        # With congee closed the service is stopped: start it for this, and stop it again after.
+        started = sens.start_service()
+        if started:
+            print("Started the sensor service, finding hardware...")
+        try:
+            sens.wait_for_data(30)
+        finally:
+            if started:
+                sens.stop_service()
         if not sens.ok:
             print(f"Can't read sensors at {sens.url}: {sens.error}")
-            print('Is the congee sensor service installed and running? Check "congee sensors" in services.msc, '
+            if sens.start_problem:
+                print(f"Starting the congee sensor service: {sens.start_problem}.")
+            print('Is the congee sensor service installed? Check "congee sensors" in services.msc, '
                   "or run congee's setup again and tick it.")
             return
         print("Reading " + sens.url)
@@ -2275,7 +2413,12 @@ def main():
         ev = Evaluator(stats, settings, 1.0, lambda c: bool(HEX6_RE.match(c)))
         tokens = tokenize(text)
         stats.sensors.configure(settings["sensors_url"], 1.0)
-        stats.sensors.refresh_now()
+        started = stats.sensors.start_service()
+        try:
+            stats.sensors.wait_for_data(30)
+        finally:
+            if started:
+                stats.sensors.stop_service()
         stats.drive_scanner.wait(15)  # include network/DVD drives, which are scanned in the background
         stats.sample()
         ev.build(tokens)  # prime process CPU counters and exec commands

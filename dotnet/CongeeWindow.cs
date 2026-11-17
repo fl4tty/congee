@@ -95,6 +95,16 @@ public sealed class CongeeWindow : Window
         TrayIcon? tray = null;
         Loaded += (_, _) => tray ??= new TrayIcon(name == "congee.conf" ? "congee" : $"congee - {name}", items);
         Closed += (_, _) => tray?.Dispose();
+        // The sensor service runs only while congee does: started once the config is read (it may
+        // name another sensors_url), stopped on exit. Starting can wait for a stop still in progress.
+        bool serviceStarted = false;
+        Loaded += (_, _) =>
+        {
+            if (serviceStarted) return;
+            serviceStarted = true;
+            Task.Run(stats.Sensors.StartService);
+        };
+        Closed += (_, _) => stats.Sensors.StopService();
 
         MouseLeftButtonDown += (_, e) =>
         {
