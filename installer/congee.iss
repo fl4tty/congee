@@ -9,11 +9,20 @@
 ;   %LOCALAPPDATA%\Programs\congee, creates %APPDATA%\congee\congee.conf if it
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
 
-#define AppName "congee"
+#ifdef TEST_INSTANCE
+  ; test build only: installs beside the real congee, with its own uninstall entry and records
+  #define AppName "congee-uninstall-test"
+#else
+  #define AppName "congee"
+#endif
 #define AppVersion "1.2.3"
 
 [Setup]
+#ifdef TEST_INSTANCE
+AppId={{0D6A3C55-9E21-4C7B-8A44-6F1E2B3C4D5E}
+#else
 AppId={{6C7B1E64-3F0A-4E2B-9B7C-2C0E5A1D9F43}
+#endif
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -109,6 +118,12 @@ const
   DEP_PY = 2;
   DEP_WINGET = 3;
   WINGET_FLAGS = ' -e --accept-package-agreements --accept-source-agreements --disable-interactivity';
+  { winget id = name of each app setup (or congee itself) installed; the uninstaller offers to remove them }
+#ifdef TEST_INSTANCE
+  DEPS_KEY = 'Software\congee-uninstall-test\InstalledDeps';
+#else
+  DEPS_KEY = 'Software\congee\InstalledDeps';
+#endif
   URL_LHM = 'https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases';
   URL_NET = 'https://dotnet.microsoft.com/download/dotnet/10.0';
   URL_PY = 'https://www.python.org/downloads/windows/';
@@ -410,6 +425,8 @@ begin
   finally
     WizardForm.ProgressGauge.Style := npbstNormal;
   end;
+  { Remember what we installed, so uninstalling congee can offer to remove it too. }
+  if Result then RegWriteStringValue(HKCU, DEPS_KEY, Id, Title);
   if not Result then
     if MsgBox(Title + ' could not be installed automatically (winget exit code ' + IntToStr(Code) + ').' + #13#10#13#10 +
               'Open its download page to install it yourself?' + #13#10 + Url,
@@ -518,4 +535,113 @@ begin
     if WizardIsComponentSelected('python') then SetupPythonVenv();
     ConfigureLhm();
   end;
+end;
+
+{ ------------------------------------------------------------- uninstalling }
+
+{ Ends LibreHardwareMonitor so winget can remove its files. It runs as administrator, so if
+  ending it directly isn't allowed, taskkill runs as administrator (Windows asks). }
+procedure StopLhmForUninstall();
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if Code = 1 then  { access denied }
+    ShellExec('runas', ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+{ Lists the apps setup or congee installed (and that are still there) with checkboxes, all
+  unticked, and removes the ticked ones with winget. Skipped for silent uninstalls. }
+procedure OfferToRemoveDeps();
+var
+  Ids: TArrayOfString;
+  Names: array of String;
+  Present: array of String;
+  I, N, Code, Y: Integer;
+  Name: String;
+  Form: TSetupForm;
+  Intro, Note: TNewStaticText;
+  List: TNewCheckListBox;
+  OkBtn, SkipBtn: TNewButton;
+  Failed: String;
+begin
+  if UninstallSilent or (WingetExe() = '') then Exit;
+  if not RegGetValueNames(HKCU, DEPS_KEY, Ids) then Exit;
+  N := 0;
+  SetArrayLength(Present, GetArrayLength(Ids));
+  SetArrayLength(Names, GetArrayLength(Ids));
+  for I := 0 to GetArrayLength(Ids) - 1 do
+  begin
+    if not RegQueryStringValue(HKCU, DEPS_KEY, Ids[I], Name) then Name := Ids[I];
+    { still installed? }
+    if (Ids[I] = 'LibreHardwareMonitor.LibreHardwareMonitor') and not LhmInstalled() then Continue;
+    if (Ids[I] = 'Microsoft.DotNet.DesktopRuntime.10') and not HasDesktopRuntime10() then Continue;
+    if (Ids[I] = 'Python.Python.3.12') and (FindPython312() = '') then Continue;
+    Present[N] := Ids[I];
+    Names[N] := Name;
+    N := N + 1;
+  end;
+  if N = 0 then Exit;
+
+  Form := CreateCustomForm(ScaleX(440), ScaleY(260), False, True);
+  Form.Caption := 'Uninstall congee';
+  Intro := TNewStaticText.Create(Form);
+  Intro.Parent := Form;
+  Intro.Left := ScaleX(16); Intro.Top := ScaleY(16);
+  Intro.Width := Form.ClientWidth - ScaleX(32);
+  Intro.AutoSize := False; Intro.WordWrap := True; Intro.Height := ScaleY(46);
+  Intro.Caption := 'These were installed along with congee. Tick any you also want to remove. ' +
+                   'Leave them if other programs use them.';
+  List := TNewCheckListBox.Create(Form);
+  List.Parent := Form;
+  List.Left := ScaleX(16); List.Top := ScaleY(66);
+  List.Width := Form.ClientWidth - ScaleX(32); List.Height := ScaleY(90);
+  for I := 0 to N - 1 do
+    List.AddCheckBox(Names[I], '', 0, False, True, False, False, nil);
+  Y := List.Top + List.Height + ScaleY(8);
+  Note := TNewStaticText.Create(Form);
+  Note.Parent := Form;
+  Note.Left := ScaleX(16); Note.Top := Y;
+  Note.Width := Form.ClientWidth - ScaleX(32);
+  Note.AutoSize := False; Note.WordWrap := True; Note.Height := ScaleY(32);
+  Note.Caption := 'They are removed with winget. Removing the .NET runtime asks for administrator permission.';
+  OkBtn := TNewButton.Create(Form);
+  OkBtn.Parent := Form;
+  OkBtn.Caption := 'Remove ticked';
+  OkBtn.Width := ScaleX(110); OkBtn.Height := ScaleY(25);
+  OkBtn.Left := Form.ClientWidth - ScaleX(16) - ScaleX(110) - ScaleX(8) - ScaleX(110);
+  OkBtn.Top := Form.ClientHeight - ScaleY(16) - ScaleY(25);
+  OkBtn.ModalResult := mrOk;
+  SkipBtn := TNewButton.Create(Form);
+  SkipBtn.Parent := Form;
+  SkipBtn.Caption := 'Keep them';
+  SkipBtn.Width := ScaleX(110); SkipBtn.Height := ScaleY(25);
+  SkipBtn.Left := Form.ClientWidth - ScaleX(16) - ScaleX(110);
+  SkipBtn.Top := OkBtn.Top;
+  SkipBtn.ModalResult := mrCancel;
+  SkipBtn.Cancel := True;
+  Form.ActiveControl := SkipBtn;
+  if Form.ShowModal() <> mrOk then Exit;
+
+  Failed := '';
+  for I := 0 to N - 1 do
+    if List.Checked[I] then
+    begin
+      UninstallProgressForm.StatusLabel.Caption := 'Removing ' + Names[I] + ' with winget...';
+      UninstallProgressForm.StatusLabel.Update;
+      if Present[I] = 'LibreHardwareMonitor.LibreHardwareMonitor' then StopLhmForUninstall();
+      if Exec(WingetExe(), 'uninstall --id ' + Present[I] + ' -e --accept-source-agreements --disable-interactivity',
+              '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+        RegDeleteValue(HKCU, DEPS_KEY, Present[I])
+      else
+        Failed := Failed + #13#10 + '  - ' + Names[I] + ' (winget exit code ' + IntToStr(Code) + '): winget uninstall --id ' + Present[I];
+    end;
+  if Failed <> '' then
+    MsgBox('These could not be removed automatically. You can remove them from Settings > Apps, or with:' + Failed,
+           mbError, MB_OK);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then OfferToRemoveDeps();
 end;

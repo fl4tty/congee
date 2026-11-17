@@ -193,6 +193,7 @@ DEFAULTS = {
     "temperature_unit": "celsius",  # or fahrenheit: how temperature values are shown
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
     "start_lhm": "ask",  # start LibreHardwareMonitor if it isn't running: ask, yes or no
+    "stop_lhm": "ask",  # on Exit congee, also stop LibreHardwareMonitor: ask, yes or no
     "logging": "yes",  # write congee.log (starts, stops, crashes) to %APPDATA%\congee
     "rendering": "software",  # .NET edition only: draw with the CPU or the graphics card; Tk always uses GDI
 }
@@ -1575,11 +1576,14 @@ if IS_WINDOWS:
 # It must run as administrator, so starting it shows Windows' admin prompt.
 # --------------------------------------------------------------------------
 LHM_EXE = "LibreHardwareMonitor.exe"
+# CONGEE_TEST_LHM_PROCESS=<name> makes congee treat that process as LHM, to test start/stop prompts
+# without touching the real one.
+LHM_PROC = (os.environ.get("CONGEE_TEST_LHM_PROCESS") or "LibreHardwareMonitor") + ".exe"
 
 
 def lhm_running() -> bool:
     for proc in psutil.process_iter(["name"]):
-        if (proc.info["name"] or "").lower() == LHM_EXE.lower():
+        if (proc.info["name"] or "").lower() == LHM_PROC.lower():
             return True
     return False
 
@@ -1635,8 +1639,8 @@ def lhm_is_local(sensors_url: str) -> bool:
     return host in ("localhost", "127.0.0.1", "::1") or host == socket.gethostname().lower()
 
 
-def lhm_dialog(root, heading: str, text: str, yes_label: str) -> tuple[bool, bool]:
-    """Heading, text, 'Remember my choice', and yes / 'Not now'. Returns (yes, remember)."""
+def lhm_dialog(root, heading: str, text: str, yes_label: str, no_label: str = "Not now") -> tuple[bool, bool]:
+    """Heading, text, 'Remember my choice', and yes / no buttons. Returns (yes, remember)."""
     result = {"yes": False}
     win = tk.Toplevel(root)
     win.title("congee")
@@ -1656,7 +1660,7 @@ def lhm_dialog(root, heading: str, text: str, yes_label: str) -> tuple[bool, boo
         win.destroy()
     yes_btn = tk.Button(buttons, text=yes_label, width=max(11, len(yes_label) + 2), default="active", command=lambda: choose(True))
     yes_btn.pack(side="left", padx=(0, 8))
-    tk.Button(buttons, text="Not now", width=11, command=lambda: choose(False)).pack(side="left")
+    tk.Button(buttons, text=no_label, width=max(11, len(no_label) + 2), command=lambda: choose(False)).pack(side="left")
     win.bind("<Return>", lambda e: choose(True))
     win.bind("<Escape>", lambda e: choose(False))
     win.protocol("WM_DELETE_WINDOW", lambda: choose(False))
@@ -1683,6 +1687,49 @@ def ask_start_lhm(root) -> tuple[bool, bool]:
         "clocks, power and memory. Everything else works without it.\n\n"
         "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.",
         "Start it")
+
+
+def ask_stop_lhm(root) -> tuple[bool, bool]:
+    """'Stop LibreHardwareMonitor too?' dialog, shown on Exit congee. Returns (stop, remember)."""
+    return lhm_dialog(
+        root, "Stop LibreHardwareMonitor too?",
+        "congee is closing. LibreHardwareMonitor is still running in the background to read temperatures, fans "
+        "and GPU stats. Stop it as well?\n\n"
+        "Keep it running if other apps use it. If Windows doesn't let congee stop it, Windows asks for "
+        "administrator permission.",
+        "Stop it", "Keep it running")
+
+
+def stop_lhm() -> bool:
+    """End every LibreHardwareMonitor process. It closes to the tray instead of exiting when asked nicely,
+    so it is ended directly; if Windows won't allow that (it runs as administrator), taskkill is run as
+    administrator, which shows the admin prompt. False if it's still running."""
+    denied = False
+    procs = [p for p in psutil.process_iter(["name"]) if (p.info["name"] or "").lower() == LHM_PROC.lower()]
+    for p in procs:
+        try:
+            p.kill()
+        except psutil.AccessDenied:
+            denied = True
+        except psutil.NoSuchProcess:
+            pass
+    psutil.wait_procs(procs, timeout=3)
+    if denied:
+        try:
+            os.startfile("taskkill.exe", "runas", f"/F /IM {LHM_PROC}", show_cmd=0)  # SW_HIDE
+        except OSError as e:
+            if getattr(e, "winerror", None) == 1223:  # ERROR_CANCELLED: "No" on the admin prompt
+                Log.write("LibreHardwareMonitor not stopped: the admin prompt was declined")
+            else:
+                Log.write(f"couldn't stop LibreHardwareMonitor: {e}")
+            return False
+        for _ in range(20):  # taskkill runs on its own; give it up to 5 s
+            if not lhm_running():
+                break
+            time.sleep(0.25)
+    stopped = not lhm_running()
+    Log.write("stopped LibreHardwareMonitor" if stopped else "couldn't stop LibreHardwareMonitor")
+    return stopped
 
 
 LHM_WINGET_ID = "LibreHardwareMonitor.LibreHardwareMonitor"
@@ -1779,6 +1826,13 @@ def install_lhm(root, winget: str, done):
         if ok and exe:
             Log.write(f"installed LibreHardwareMonitor: {exe}")
             ensure_lhm_web_server_config(exe)
+            if code == 0:  # newly installed (not "already there"): congee's uninstaller offers to remove it
+                try:
+                    import winreg
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\congee\InstalledDeps") as k:
+                        winreg.SetValueEx(k, LHM_WINGET_ID, 0, winreg.REG_SZ, "LibreHardwareMonitor")
+                except OSError as e:
+                    Log.write(f"couldn't record the LibreHardwareMonitor install: {e}")
             done(exe)
             return
         why = ("winget finished, but LibreHardwareMonitor.exe couldn't be found afterwards." if ok
@@ -2128,8 +2182,34 @@ class Congee:
             pass
 
     def exit_from_menu(self):
+        """Exit congee from the tray menu: also stop LibreHardwareMonitor if stop_lhm says so (or the user
+        agrees). Only here: Windows shutting down or setup closing congee leave LHM alone."""
         Log.stop_reason("Exit congee chosen from the menu")
+        try:
+            self.stop_lhm_on_exit()
+        except Exception as e:  # noqa: BLE001 - never block exiting
+            Log.write(f"LibreHardwareMonitor check on exit failed: {e}")
         self.quit()
+
+    def stop_lhm_on_exit(self):
+        if not lhm_running() or not lhm_is_local(self.settings["sensors_url"]):
+            return
+        mode = self.settings["stop_lhm"].strip().lower()
+        if mode in ("no", "false", "0", "off"):
+            return
+        stop = True
+        if not yes(mode):  # ask
+            stop, remember = ask_stop_lhm(self.root)
+            if remember:
+                try:
+                    set_setting(self.config_path, "stop_lhm", "yes" if stop else "no",
+                                "Stop LibreHardwareMonitor too when you choose Exit congee: ask, yes or no")
+                except OSError:
+                    pass
+            if not stop:
+                Log.write('LibreHardwareMonitor left running: "Keep it running"' + (" (remembered: stop_lhm no)" if remember else ""))
+        if stop:
+            stop_lhm()
 
     def heartbeat(self):
         Log.write(f"still running (up {Log.uptime()})")

@@ -73,7 +73,7 @@ public sealed class CongeeWindow : Window
             new("Reset position", () => { userPos = null; geom = null; Render(); }),
             new("Logging", ToggleLogging, Checked: () => Log.Enabled),
             new("", null),
-            new("Exit congee", () => { Log.StopReason("Exit congee chosen from the menu"); Application.Current.Shutdown(); }),
+            new("Exit congee", ExitFromMenu),
         };
         var menu = new ContextMenu();
         var refresh = new List<Action>();  // labels and checkmarks that change, updated when the menu opens
@@ -166,6 +166,38 @@ public sealed class CongeeWindow : Window
             if (!start) Log.Write($"LibreHardwareMonitor not started: \"Not now\"{(remember ? " (remembered: start_lhm no)" : "")}");
         }
         if (start) Lhm.Start(exe);
+    }
+
+    /// <summary>Exit congee from the tray menu: also stop LibreHardwareMonitor if stop_lhm says so (or the
+    /// user agrees). Only here: Windows shutting down or setup closing congee leave LHM alone.</summary>
+    void ExitFromMenu()
+    {
+        Log.StopReason("Exit congee chosen from the menu");
+        try { StopLhmOnExit(); } catch (Exception e) { Log.Write("LibreHardwareMonitor check on exit failed: " + e.Message); }
+        Application.Current.Shutdown();
+    }
+
+    void StopLhmOnExit()
+    {
+        if (!Lhm.IsRunning() || !Lhm.IsLocal(settings["sensors_url"])) return;
+        string mode = settings["stop_lhm"].Trim().ToLowerInvariant();
+        if (mode is "no" or "false" or "0" or "off") return;
+        bool stop = true;
+        if (!Config.Yes(mode))  // ask
+        {
+            (stop, bool remember) = Lhm.AskStop();
+            if (remember)
+            {
+                try
+                {
+                    Config.SetSetting(configPath, "stop_lhm", stop ? "yes" : "no",
+                        "Stop LibreHardwareMonitor too when you choose Exit congee: ask, yes or no");
+                }
+                catch (Exception) { }
+            }
+            if (!stop) Log.Write($"LibreHardwareMonitor left running: \"Keep it running\"{(remember ? " (remembered: stop_lhm no)" : "")}");
+        }
+        if (stop) Lhm.Stop();
     }
 
     void RememberStartLhm(bool yes)

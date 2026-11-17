@@ -11,6 +11,7 @@
 #   1.2.2  logging setting (yes; the tray menu's Logging item switches it);
 #          start_lhm setting (ask: offer to start LibreHardwareMonitor if it isn't running)
 #   1.2.3  rendering setting (software: the .NET edition draws with the CPU, using less memory)
+#   1.2.4  stop_lhm setting (ask: on Exit congee, offer to stop LibreHardwareMonitor too)
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -51,6 +52,14 @@ if ($text -notmatch '(?m)^\s*start_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
              "start_lhm ask`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the start_lhm setting (congee offers to start LibreHardwareMonitor when it is not running)')
+}
+
+# --- stop_lhm setting, just above TEXT -------------------------------------------------------
+if ($text -notmatch '(?m)^\s*stop_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
+    $block = "# When you choose Exit congee, also stop LibreHardwareMonitor: ask, yes or no.`n" +
+             "stop_lhm ask`n`n"
+    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
+    $changes.Add('added the stop_lhm setting (on Exit congee, offers to stop LibreHardwareMonitor too)')
 }
 
 # --- rendering setting, just above TEXT ------------------------------------------------------

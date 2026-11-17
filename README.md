@@ -85,6 +85,13 @@ choose *More info* → *Run anyway*.
 The Start menu gets *congee*, *Edit congee config*, the README and *Uninstall congee*. Uninstalling stops any
 running congee and removes the program, but **keeps your config** in `%APPDATA%\congee`.
 
+If setup (or congee itself) installed LibreHardwareMonitor, Python 3.12 or the .NET 10 Desktop Runtime for you,
+uninstalling lists them with checkboxes, all unticked, so you can remove them too. Leave them if other programs use
+them. Ticked ones are removed with winget; removing the .NET runtime asks for admin permission, and
+LibreHardwareMonitor is stopped first. Apps you had installed yourself aren't listed. Setup keeps track of what it
+installed under `HKCU\Software\congee\InstalledDeps`. A silent uninstall (`/SILENT` or `/VERYSILENT`) leaves them
+all installed.
+
 #### Building the installer
 
 You need the .NET 10 SDK and Inno Setup 6 (`winget install JRSoftware.InnoSetup`). Then:
@@ -172,7 +179,7 @@ Command-line options (the same in both editions; Python ones run as `.venv\Scrip
   | Reload config | Re-read the config now (saving the file also does this) |
   | Reset position | Move it back to where the config places it, after dragging |
   | Logging | Turn the [log file](#log-file) on or off (checked = on). Saved in your config as `logging yes/no` |
-  | Exit congee | Stop congee |
+  | Exit congee | Stop congee (and, if you agree, LibreHardwareMonitor: see `stop_lhm`) |
 
   Windows 11 tucks new tray icons behind the **^** arrow. To keep congee's icon on the taskbar, go to
   **Settings → Personalization → Taskbar → Other system tray icons** and turn on **congee**, or drag the icon out of
@@ -279,6 +286,12 @@ for admin permission. If winget fails you get the exit code and the command to r
 opens LHM's download page. **Remember my choice** works the same way here: remembering **Not now** sets `start_lhm no`.
 congee asks before installing even with `start_lhm yes`.
 
+**When you choose Exit congee** and LHM is running, congee asks whether to stop LHM too (**Stop it** or **Keep it
+running**, plus **Remember my choice**, which sets `stop_lhm yes` or `stop_lhm no`). Keep it running if other apps
+use LHM. LHM closes to the tray when asked politely, so congee ends it directly; if Windows doesn't allow that
+because LHM runs as administrator, Windows asks for admin permission. congee only does this on **Exit congee**:
+Windows shutting down, or setup closing congee, leaves LHM alone.
+
 **Any hardware brand.** The default config uses the `gpu_*` and `cpu_*` variables, so it works unchanged on AMD, NVIDIA and
 Intel GPUs and on AMD and Intel CPUs. Each of those variables tries every brand's sensor names in turn
 (e.g. `cpu_temp` reads `Core (Tctl/Tdie)` on AMD and `CPU Package` on Intel). Lines for hardware a PC doesn't have,
@@ -331,6 +344,7 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
 | `logging` | yes | `no` stops writing `congee.log`. The tray menu's **Logging** item changes this for you |
 | `rendering` | software | .NET edition only. `software` draws with the CPU instead of setting up Direct3D on the graphics card, which saves about 30 MB in Task Manager (about 50 MB committed) with the same look and no extra CPU for a widget this size. It works the same on AMD, NVIDIA and Intel graphics. `hardware` draws with the graphics card. Takes effect when congee restarts |
+| `stop_lhm` | ask | What to do with LibreHardwareMonitor when you choose **Exit congee**: `ask`, `yes` (stop it too), or `no` (leave it running) |
 | `start_lhm` | ask | What to do when LibreHardwareMonitor isn't running at start: `ask`, `yes` (start it; Windows asks for admin), or `no` (also stops the offer to install it) |
 
 ## Variables

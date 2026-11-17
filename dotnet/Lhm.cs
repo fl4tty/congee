@@ -15,7 +15,11 @@ static class Lhm
 {
     const string ExeName = "LibreHardwareMonitor.exe";
 
-    public static bool IsRunning() => Process.GetProcessesByName("LibreHardwareMonitor").Length > 0;
+    // CONGEE_TEST_LHM_PROCESS=<name> makes congee treat that process as LHM, to test start/stop prompts
+    // without touching the real one.
+    static string ProcName => Environment.GetEnvironmentVariable("CONGEE_TEST_LHM_PROCESS") is { Length: > 0 } n ? n : "LibreHardwareMonitor";
+
+    public static bool IsRunning() => Process.GetProcessesByName(ProcName).Length > 0;
 
     /// <summary>LibreHardwareMonitor.exe from a winget install (per user or machine), Program Files,
     /// or wherever Windows' installed-apps list says it is; null if it isn't installed.</summary>
@@ -85,6 +89,54 @@ static class Lhm
         "clocks, power and memory. Everything else works without it.\n\n" +
         "It needs administrator rights to read the hardware sensors, so Windows will ask for permission.",
         "Start it");
+
+    // ---- stopping it -------------------------------------------------------------------------
+
+    /// <summary>"Stop LibreHardwareMonitor too?" dialog, shown on Exit congee. Returns (stop, remember).</summary>
+    public static (bool stop, bool remember) AskStop() => Dialog(
+        "Stop LibreHardwareMonitor too?",
+        "congee is closing. LibreHardwareMonitor is still running in the background to read temperatures, fans " +
+        "and GPU stats. Stop it as well?\n\n" +
+        "Keep it running if other apps use it. If Windows doesn't let congee stop it, Windows asks for " +
+        "administrator permission.",
+        "Stop it", "Keep it running");
+
+    /// <summary>Ends every LibreHardwareMonitor process. It closes to the tray instead of exiting when
+    /// asked nicely, so it is ended directly; if Windows won't allow that (it runs as administrator),
+    /// taskkill is run as administrator, which shows the admin prompt. False if it's still running.</summary>
+    public static bool Stop()
+    {
+        bool denied = false;
+        foreach (var p in Process.GetProcessesByName(ProcName))
+        {
+            try { p.Kill(); p.WaitForExit(3000); }
+            catch (Win32Exception) { denied = true; }
+            catch (InvalidOperationException) { }  // already gone
+            finally { p.Dispose(); }
+        }
+        if (denied)
+        {
+            try
+            {
+                using var tk = Process.Start(new ProcessStartInfo("taskkill.exe", "/F /IM " + ProcName + ".exe")
+                    { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden });
+                tk?.WaitForExit(10000);
+            }
+            catch (Win32Exception e) when (e.NativeErrorCode == 1223)
+            {
+                Log.Write("LibreHardwareMonitor not stopped: the admin prompt was declined");
+                return false;
+            }
+            catch (Exception e)
+            {
+                Log.Write("couldn't stop LibreHardwareMonitor: " + e.Message);
+                return false;
+            }
+        }
+        bool stopped = !IsRunning();
+        Log.Write(stopped ? "stopped LibreHardwareMonitor" : "couldn't stop LibreHardwareMonitor");
+        return stopped;
+    }
 
     // ---- installing it ----------------------------------------------------------------------
 
@@ -165,6 +217,7 @@ static class Lhm
         {
             Log.Write("installed LibreHardwareMonitor: " + exe);
             EnsureWebServerConfig(exe);
+            if (code == 0) RecordInstalled();  // newly installed (not "already there"): uninstall offers to remove it
             return exe;
         }
         string why = ok ? "winget finished, but LibreHardwareMonitor.exe couldn't be found afterwards."
@@ -176,6 +229,17 @@ static class Lhm
             "\nor download it from:\n    " + ReleasesUrl,
             "congee", MessageBoxButton.OK, MessageBoxImage.Warning);
         return null;
+    }
+
+    /// <summary>Notes that congee installed LHM, where congee's uninstaller looks (same key setup uses).</summary>
+    static void RecordInstalled()
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(@"Software\congee\InstalledDeps");
+            k.SetValue(WingetId, "LibreHardwareMonitor");
+        }
+        catch (Exception e) { Log.Write("couldn't record the LibreHardwareMonitor install: " + e.Message); }
     }
 
     static string LastLine(string output) =>
@@ -207,8 +271,8 @@ static class Lhm
 
     // ---- dialog -------------------------------------------------------------------------------
 
-    /// <summary>Heading, text, "Remember my choice", and yes / "Not now". Returns (yes, remember).</summary>
-    static (bool yes, bool remember) Dialog(string heading, string text, string yesLabel)
+    /// <summary>Heading, text, "Remember my choice", and yes / no buttons. Returns (yes, remember).</summary>
+    static (bool yes, bool remember) Dialog(string heading, string text, string yesLabel, string noLabel = "Not now")
     {
         var win = new Window
         {
@@ -222,7 +286,7 @@ static class Lhm
         bool chosen = false;
         var remember = new CheckBox { Content = "Remember my choice", Margin = new Thickness(0, 14, 0, 0) };
         var yes = new Button { Content = yesLabel, IsDefault = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 8, 0) };
-        var no = new Button { Content = "Not now", IsCancel = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3) };
+        var no = new Button { Content = noLabel, IsCancel = true, MinWidth = 90, Padding = new Thickness(10, 3, 10, 3) };
         yes.Click += (_, _) => { chosen = true; win.Close(); };
         no.Click += (_, _) => win.Close();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
