@@ -89,6 +89,7 @@ Source: "..\start.bat"; DestDir: "{app}\python"; Components: python; Flags: igno
 ; Shared
 Source: "..\congee.ico"; DestDir: "{app}\python"; Components: python; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\config-guide.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\congee.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "upgrade-config.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Sensor service (both editions). Setup copies it on to Program Files when installing it.
@@ -101,6 +102,7 @@ Name: "{group}\congee"; Filename: "{app}\congee.exe"; Components: dotnet
 Name: "{group}\congee (Python edition)"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Components: python
 Name: "{group}\Edit congee config"; Filename: "{userappdata}\congee\congee.conf"
 Name: "{group}\congee README"; Filename: "{app}\README.md"
+Name: "{group}\congee config guide"; Filename: "{app}\docs\config-guide.md"
 Name: "{group}\Uninstall congee"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\congee"; Filename: "{app}\congee.exe"; Tasks: desktopicon; Components: dotnet
 Name: "{userdesktop}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Tasks: desktopicon; Check: PythonIsMain

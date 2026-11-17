@@ -4,6 +4,8 @@ A [conky](https://github.com/brndnmtthws/conky)-style system monitor for Windows
 It draws live system stats as text, bars and graphs straight onto your desktop: clock, CPU, GPU, memory, disks, network,
 top processes, temperatures, fan speeds and battery. A plain-text config file controls everything, just like conky.
 
+**Download:** [fl4tty.github.io/congee](https://fl4tty.github.io/congee/) (always the latest release).
+
 <p align="center"><img src="docs/screenshot.png" alt="congee showing clock, CPU, GPU, temperatures, fans, memory, every drive with its read/write, network and top processes" width="360"></p>
 
 - [Editions: Python or .NET](#editions-python-or-net)
@@ -220,6 +222,10 @@ Tray icon → **Edit config** always opens the file in use. To start over, delet
 
 ### Editing it
 
+**New to it? Read the [config guide](docs/config-guide.md)** (Start menu → *congee config guide*): a step-by-step
+walk-through with examples, how line breaks and `${if_…}` work together, finding adapter and sensor names, running
+commands, recipes, and what to do when something goes wrong. The short version:
+
 1. Open the config (tray icon → **Edit config**).
 2. Change something and save. The widget redraws within a second; no restart is needed.
 3. If you make a mistake, the widget shows the error in red instead of crashing.
@@ -433,6 +439,8 @@ congee\
 ├── requirements.txt   Python dependencies (psutil)
 ├── README.md
 ├── docs\screenshot.png
+├── docs\config-guide.md   Step-by-step guide to editing the config
+├── docs\index.html      The website (GitHub Pages: fl4tty.github.io/congee), shows the latest release
 ├── installer\         Setup wizard (Inno Setup)
 │   ├── congee.iss         Installer script: editions, dependency page, shortcuts
 │   ├── build.ps1          Builds installer\Output\congee-setup-<version>.exe

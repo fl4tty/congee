@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>congee: a conky-style system monitor for Windows</title>
+<meta name="description" content="congee draws live system stats on your Windows 10/11 desktop: clock, CPU, GPU, temperatures, fans, memory, disks, network. Free and open source.">
+<link rel="icon" href="favicon.ico">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2228; --muted: #5b6470; --line: #dde1e6;
+    --accent: #2e7d9a; --accent-hover: #256780; --accent-text: #ffffff; --code: #eef1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101418; --card: #171c22; --text: #d8dee9; --muted: #98a3b1; --line: #2a313a;
+      --accent: #88c0d0; --accent-hover: #a3d0dc; --accent-text: #101418; --code: #1f262e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.6;
+         font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  a { color: var(--accent); }
+  code { font-family: Consolas, "Cascadia Mono", monospace; background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  header { padding: 48px 0 8px; }
+  h1 { font-size: 44px; line-height: 1.1; margin: 0 0 8px; letter-spacing: -0.5px; }
+  .tag { font-size: 20px; color: var(--muted); margin: 0; max-width: 640px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 40px; align-items: start; padding: 32px 0; }
+  .shot { justify-self: center; width: 100%; max-width: 300px; border-radius: 10px; border: 1px solid var(--line);
+          background: #0b0e11; display: block; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  .download h2 { margin: 0 0 4px; font-size: 22px; }
+  .meta { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .btn { display: inline-block; background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600;
+         padding: 12px 22px; border-radius: 8px; font-size: 17px; }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+  .small { font-size: 14px; color: var(--muted); }
+  .hash { font-family: Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); }
+  ul.facts { padding-left: 20px; margin: 20px 0 0; }
+  ul.facts li { margin: 4px 0; }
+  section { padding: 24px 0; }
+  section h2 { font-size: 26px; margin: 0 0 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .grid3 h3 { margin: 0 0 6px; font-size: 18px; }
+  .grid3 p { margin: 0; color: var(--muted); }
+  #notes { overflow-wrap: anywhere; }
+  #notes :first-child { margin-top: 0; }
+  #notes ul { padding-left: 22px; }
+  pre.conf { background: var(--code); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 14px; margin: 12px 0 0; }
+  footer { border-top: 1px solid var(--line); margin-top: 32px; padding: 24px 0 48px; color: var(--muted); font-size: 14px; }
+  footer a { color: var(--muted); }
+  @media (max-width: 760px) {
+    header { padding-top: 32px; }
+    h1 { font-size: 36px; }
+    .tag { font-size: 18px; }
+    .hero { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+    .shot { max-width: 260px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>congee</h1>
+    <p class="tag">A <a href="https://github.com/brndnmtthws/conky">conky</a>-style system monitor for Windows 10 and 11.
+      Live stats drawn straight onto your desktop, controlled by one plain-text file.</p>
+  </header>
+
+  <div class="hero">
+    <div>
+      <div class="card download" id="download">
+        <h2 id="dl-title">Download congee</h2>
+        <p class="meta" id="dl-meta">Latest release</p>
+        <a class="btn" id="dl-btn" href="https://github.com/fl4tty/congee/releases/latest">Download the installer</a>
+        <p class="small" id="dl-hash" hidden></p>
+        <ul class="facts">
+          <li>Windows 10 or 11. Installs for your account only; no admin rights for congee itself.</li>
+          <li>Setup checks what's needed (.NET or Python, the sensor service) and offers to install it.</li>
+          <li>Windows may show a SmartScreen warning because the installer isn't code-signed:
+            choose <em>More info</em> → <em>Run anyway</em>.</li>
+          <li>Free and open source (GPL-3.0). <a href="https://github.com/fl4tty/congee/releases">All releases</a>.</li>
+        </ul>
+      </div>
+    </div>
+    <img class="shot" src="screenshot.png" width="300" height="861"
+         alt="congee on a desktop showing the clock, CPU, GPU, temperatures, fans, memory, drives, network and top processes">
+  </div>
+
+  <section>
+    <h2>What it shows</h2>
+    <div class="grid3">
+      <div class="card"><h3>System</h3><p>Clock, CPU use per core, memory, every drive with its read and write speed,
+        network speeds and addresses, top processes, battery.</p></div>
+      <div class="card"><h3>Hardware sensors</h3><p>CPU and GPU temperatures, fan speeds, GPU load, clocks, power and VRAM,
+        on AMD, NVIDIA and Intel. Read by a small service that only runs while congee does.</p></div>
+      <div class="card"><h3>Your own lines</h3><p>Conditions, colours, fonts, bars and graphs, and the output of any
+        command. Most conky configs work as they are.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>One text file controls it</h2>
+    <p>Save the file and the widget updates within a second. No restart, no settings windows.</p>
+<pre class="conf">alignment top_right
+color1 88c0d0
+
+TEXT
+${color1}CPU${color} ${cpu}%${alignr}${cpubar 6,120}
+Temp ${cpu_temp}°C   GPU ${gpu_temp}°C
+RAM ${mem} / ${memmax}${alignr}${memperc}%
+${if_up Ethernet}IP${alignr}${addr Ethernet}
+${endif}${time %H:%M}</pre>
+    <p>New to it? The <a href="config-guide.html"><strong>config guide</strong></a> walks through editing it step by step,
+      with examples and recipes. The <a href="https://github.com/fl4tty/congee#settings">README</a> lists every setting and variable.</p>
+  </section>
+
+  <section id="whatsnew" hidden>
+    <h2 id="notes-title">What's new</h2>
+    <div class="card" id="notes"></div>
+  </section>
+
+  <footer>
+    congee is free software under the <a href="https://github.com/fl4tty/congee/blob/main/LICENSE">GPL-3.0</a>.
+    Source code, issues and documentation: <a href="https://github.com/fl4tty/congee">github.com/fl4tty/congee</a>.
+    Hardware sensors use <a href="https://github.com/LibreHardwareMonitor/LibreHardwareMonitor">LibreHardwareMonitorLib</a> (MPL-2.0).
+  </footer>
+</div>
+
+<script>
+// Fills in the download box and "What's new" from the latest GitHub release, so this page
+// never needs editing for a new version. Without the API (offline, rate-limited), the button
+// still goes to the latest release's page.
+(async () => {
+  try {
+    const res = await fetch('https://api.github.com/repos/fl4tty/congee/releases/latest',
+                            { headers: { Accept: 'application/vnd.github.html+json' } });
+    if (!res.ok) return;
+    const rel = await res.json();
+    const exe = (rel.assets || []).find(a => /\.exe$/i.test(a.name));
+    const version = (rel.tag_name || '').replace(/^v/, '');
+    const date = new Date(rel.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    document.getElementById('dl-title').textContent = 'Download congee ' + version;
+    if (exe) {
+      const mb = (exe.size / 1048576).toFixed(1);
+      document.getElementById('dl-meta').textContent = 'Released ' + date + ' · ' + exe.name + ' · ' + mb + ' MB';
+      const btn = document.getElementById('dl-btn');
+      btn.href = exe.browser_download_url;
+      btn.textContent = 'Download congee ' + version;
+      if (exe.digest && exe.digest.startsWith('sha256:')) {
+        const h = document.getElementById('dl-hash');
+        h.innerHTML = 'SHA-256: <span class="hash"></span>';
+        h.querySelector('.hash').textContent = exe.digest.slice(7);
+        h.hidden = false;
+      }
+    } else {
+      document.getElementById('dl-meta').textContent = 'Released ' + date;
+    }
+    if (rel.body_html) {
+      document.getElementById('notes-title').textContent = "What's new in " + version;
+      document.getElementById('notes').innerHTML = rel.body_html;  // GitHub's own sanitized rendering of the release notes
+      document.getElementById('whatsnew').hidden = false;
+    }
+  } catch (e) { /* keep the fallback link */ }
+})();
+</script>
+</body>
+</html>
