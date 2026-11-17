@@ -39,6 +39,7 @@ public static class Config
         ["gpu"] = "auto",
         ["start_lhm"] = "ask",             // start LibreHardwareMonitor if it isn't running: ask, yes or no
         ["logging"] = "yes",               // write congee.log (starts, stops, crashes) to %APPDATA%\congee
+        ["rendering"] = "software",        // draw with the CPU (software) or the graphics card (hardware); needs a restart
     };
 
     static readonly Dictionary<string, string> AlignAliases = new()

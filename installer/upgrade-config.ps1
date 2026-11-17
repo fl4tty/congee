@@ -10,6 +10,7 @@
 #          GPU driver line; every drive (with its own read/write) instead of only C:
 #   1.2.2  logging setting (yes; the tray menu's Logging item switches it);
 #          start_lhm setting (ask: offer to start LibreHardwareMonitor if it isn't running)
+#   1.2.3  rendering setting (software: the .NET edition draws with the CPU, using less memory)
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -50,6 +51,15 @@ if ($text -notmatch '(?m)^\s*start_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
              "start_lhm ask`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the start_lhm setting (congee offers to start LibreHardwareMonitor when it is not running)')
+}
+
+# --- rendering setting, just above TEXT ------------------------------------------------------
+if ($text -notmatch '(?m)^\s*rendering\b' -and $text -match '(?m)^TEXT\s*$') {
+    $block = "# .NET edition only: draw with the CPU (software, uses less memory) or the graphics card`n" +
+             "# (hardware). Takes effect when congee restarts.`n" +
+             "rendering software`n`n"
+    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
+    $changes.Add('added the rendering setting (software: the .NET edition uses less memory)')
 }
 
 # --- ${temp_unit} instead of a fixed degrees-C sign after temperature variables -------------

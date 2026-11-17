@@ -28,7 +28,7 @@ and variables, so you can switch between them at any time.
 | Needs | Python 3.12 + the psutil package | .NET 10 Desktop Runtime |
 | Text quality | Colour-key transparency: text can get a slight dark edge on bright wallpapers | True per-pixel transparency: clean anti-aliased text on any wallpaper |
 | Semi-transparent background (`own_window_transparent no`) | Fades the whole widget, text included | Fades only the background, like real conky |
-| Memory use | ~60 MB | ~190 MB (normal WPF baseline; steady over time) |
+| Memory use (Task Manager) | ~35 MB | ~80 MB (WPF baseline; steady over time; ~115 MB with `rendering hardware`) |
 | Start it with | `start.bat` | `dotnet\publish\congee.exe` |
 | Best if | You want the smallest footprint or want to hack on it in Python | You want the best-looking text |
 
@@ -330,6 +330,7 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `temp_bar_max` | 100 | °C that fill a temperature bar or graph (always °C, whatever `temperature_unit` says) |
 | `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
 | `logging` | yes | `no` stops writing `congee.log`. The tray menu's **Logging** item changes this for you |
+| `rendering` | software | .NET edition only. `software` draws with the CPU instead of setting up Direct3D on the graphics card, which saves about 30 MB in Task Manager (about 50 MB committed) with the same look and no extra CPU for a widget this size. It works the same on AMD, NVIDIA and Intel graphics. `hardware` draws with the graphics card. Takes effect when congee restarts |
 | `start_lhm` | ask | What to do when LibreHardwareMonitor isn't running at start: `ask`, `yes` (start it; Windows asks for admin), or `no` (also stops the offer to install it) |
 
 ## Variables

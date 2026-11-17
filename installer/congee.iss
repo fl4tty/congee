@@ -284,11 +284,11 @@ begin
   NetRadio := AddRadio(EditionPage, 0, '.NET edition (recommended)');
   AddDescription(EditionPage, ScaleY(22),
     'The best-looking text: true per-pixel transparency keeps text crisp on any wallpaper, and a ' +
-    'semi-transparent background fades only the background, like real conky. Uses about 190 MB of memory. ' +
+    'semi-transparent background fades only the background, like real conky. Uses about 80 MB of memory. ' +
     'Needs the .NET 10 Desktop Runtime from Microsoft.');
   PyRadio := AddRadio(EditionPage, ScaleY(84), 'Python edition');
   AddDescription(EditionPage, ScaleY(106),
-    'The smallest footprint, about 60 MB of memory, and easy to tweak if you know Python. Text can get a ' +
+    'The smallest footprint, about 35 MB of memory, and easy to tweak if you know Python. Text can get a ' +
     'slight dark edge on bright wallpapers. Needs Python 3.12 from python.org; setup adds the psutil ' +
     'package itself.');
   Note := AddDescription(EditionPage, ScaleY(176),

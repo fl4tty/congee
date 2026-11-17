@@ -194,6 +194,7 @@ DEFAULTS = {
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
     "start_lhm": "ask",  # start LibreHardwareMonitor if it isn't running: ask, yes or no
     "logging": "yes",  # write congee.log (starts, stops, crashes) to %APPDATA%\congee
+    "rendering": "software",  # .NET edition only: draw with the CPU or the graphics card; Tk always uses GDI
 }
 
 ALIGN_ALIASES = {

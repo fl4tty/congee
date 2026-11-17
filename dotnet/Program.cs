@@ -53,9 +53,21 @@ public static class Program
             return RunCli(mode, config);
         }
 
-        bool logging = true;
-        try { logging = Config.Yes(Config.Parse(config).settings["logging"]); } catch { }
+        bool logging = true, hardware = false;
+        try
+        {
+            var s = Config.Parse(config).settings;
+            logging = Config.Yes(s["logging"]);
+            hardware = s["rendering"].Trim().Equals("hardware", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { }
         Log.Started(Path.GetFullPath(config), logging);
+        // Software rendering skips the Direct3D device and its surfaces: about 30 MB less in Task Manager
+        // (about 50 MB committed) for this small, once-a-second widget, with the same look and no more CPU. It's process-wide and
+        // must be set before any window exists, so changing the setting needs a restart.
+        if (!hardware)
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+        Log.Write($"rendering: {(hardware ? "hardware (graphics card)" : "software")}");
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         app.SessionEnding += (_, e) =>
         {
