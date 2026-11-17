@@ -62,8 +62,12 @@ static class Log
         else { Write(OffMarker); Enabled = false; }
     }
 
+    /// <summary>True once the widget has logged its start; command-line options like --sensors never do.</summary>
+    public static bool IsStarted { get; private set; }
+
     public static void Started(string configPath, bool enabled)
     {
+        IsStarted = true;
         Enabled = enabled;
         if (enabled) ReportUncleanPreviousRun();
         string version = typeof(Log).Assembly.GetName().Version?.ToString(3) ?? "?";

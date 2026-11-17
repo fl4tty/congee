@@ -8,10 +8,10 @@ namespace Congee;
 public record Sensor(string Type, string Name, string Path, double Value, string Display, string HwId, string Hardware);
 
 /// <summary>
-/// Reads temperatures, fans, etc. as JSON over localhost, so congee needs no admin rights.
-/// sensors_url "auto" (the default) reads congee's own sensor service (congee-sensors, a Windows
-/// service setup installs) and falls back to LibreHardwareMonitor's web server (Options > Remote
-/// Web Server); both serve the same format. Any other value is the one URL to read.
+/// Reads temperatures, fans, etc. as JSON over localhost from congee's sensor service
+/// (congee-sensors, a Windows service setup installs; see ..\sensors). The service runs with admin
+/// rights and does the hardware access, so congee itself needs none. It uses LibreHardwareMonitorLib
+/// and serves LibreHardwareMonitor's data.json format, so sensor names follow LHM's.
 /// </summary>
 public sealed class Sensors
 {
@@ -27,17 +27,9 @@ public sealed class Sensors
     const double StaleSeconds = 10;
 
     public const string ServiceUrl = "http://127.0.0.1:8086/data.json";
-    public const string LhmUrl = "http://localhost:8085/data.json";
-    static readonly string[] AutoUrls = [ServiceUrl, LhmUrl];
 
     public string Url { get; private set; } = Config.Defaults["sensors_url"];
-    int autoIdx;
-    string? lastSource;
-
-    public bool IsAuto => IsAutoUrl(Url);
-    public static bool IsAutoUrl(string url) => url.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase) || url.Trim().Length == 0;
-    /// <summary>The URL being read: in auto mode, whichever source answered last.</summary>
-    public string ActiveUrl => IsAuto ? AutoUrls[autoIdx] : Url;
+    bool? wasOk;  // last state written to the log
     double interval = 1.0;
     volatile List<Sensor> items = [];
     Dictionary<(string, string), (Sensor s, double t)> seen = [];
@@ -49,7 +41,9 @@ public sealed class Sensors
 
     public void Configure(string url, double updateInterval)
     {
-        if (url != Url) { items = []; Ok = false; last = -1e9; seen = []; autoIdx = 0; }
+        url = url.Trim();
+        if (url.Length == 0 || url.Equals("auto", StringComparison.OrdinalIgnoreCase)) url = ServiceUrl;
+        if (url != Url) { items = []; Ok = false; last = -1e9; seen = []; wasOk = null; }
         Url = url;
         interval = Math.Max(0.5, updateInterval);
     }
@@ -78,23 +72,7 @@ public sealed class Sensors
     {
         try
         {
-            string json;
-            if (!IsAuto) json = await Http.GetStringAsync(Url).ConfigureAwait(false);
-            else
-            {
-                // Try the source that answered last, then the other one.
-                try { json = await Http.GetStringAsync(AutoUrls[autoIdx]).ConfigureAwait(false); }
-                catch (Exception)
-                {
-                    autoIdx = (autoIdx + 1) % AutoUrls.Length;
-                    json = await Http.GetStringAsync(AutoUrls[autoIdx]).ConfigureAwait(false);
-                }
-                if (ActiveUrl != lastSource)
-                {
-                    lastSource = ActiveUrl;
-                    Log.Write("sensors: reading " + (autoIdx == 0 ? "congee's sensor service" : "LibreHardwareMonitor") + " (" + ActiveUrl + ")");
-                }
-            }
+            string json = await Http.GetStringAsync(Url).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
             var fresh = new List<Sensor>();
             Walk(doc.RootElement, [], null, fresh, ("", ""));
@@ -108,17 +86,29 @@ public sealed class Sensors
             items = seen.Values.Select(v => v.s).ToList();
             Ok = true;
             Error = "";
+            LogState(true);
         }
         catch (Exception e)
         {
             items = [];
             Ok = false;
             Error = e.Message;
+            LogState(false);
         }
         finally
         {
             Interlocked.Exchange(ref busy, 0);
         }
+    }
+
+    /// <summary>Logs when sensor data starts or stops arriving (not every poll). Not from --sensors,
+    /// which never logs a start: a line from it would look like a run that never stopped.</summary>
+    void LogState(bool ok)
+    {
+        if (wasOk == ok || !Log.IsStarted) return;
+        wasOk = ok;
+        Log.Write(ok ? "sensors: reading " + Url
+                     : "sensors: no data from " + Url + " (" + Error + "). Is the congee sensor service installed and running?");
     }
 
     static string Str(JsonElement e, string prop) =>

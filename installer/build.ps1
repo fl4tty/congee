@@ -23,7 +23,9 @@ Write-Host '== Publishing the sensor service'
 Push-Location (Join-Path $root 'sensors')
 try {
     if (Test-Path publish) { Remove-Item -Recurse -Force publish }
-    dotnet publish -c Release -o publish
+    # Stamp it with congee's version: setup updates the installed service only when this changes
+    $ver = [regex]::Match((Get-Content (Join-Path $PSScriptRoot 'congee.iss') -Raw), '#define AppVersion "([^"]+)"').Groups[1].Value
+    dotnet publish -c Release -o publish "-p:Version=$ver"
     if ($LASTEXITCODE -ne 0) { throw 'dotnet publish (sensors) failed' }
     Remove-Item publish\*.pdb -ErrorAction SilentlyContinue
 } finally { Pop-Location }

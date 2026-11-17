@@ -11,7 +11,7 @@ public static class Program
         Usage: congee [options]
           -c, --config FILE   config file (default: first found in the search list below)
           --once              print one evaluated frame as plain text and exit
-          --sensors           list LibreHardwareMonitor sensors and exit
+          --sensors           list hardware sensors (from the sensor service) and exit
           --interfaces        list network interface names and exit
           --create-config     copy the bundled default config to %APPDATA%\congee\congee.conf
           --which-config      print the config file that would be used and exit
@@ -122,13 +122,12 @@ public static class Program
                 sens.RefreshNow();
                 if (!sens.Ok)
                 {
-                    Console.WriteLine(sens.IsAuto
-                        ? $"No sensor data: neither congee's sensor service ({Sensors.ServiceUrl}) nor LibreHardwareMonitor ({Sensors.LhmUrl}) answered: {sens.Error}"
-                        : $"Can't read sensors at {sens.Url}: {sens.Error}");
-                    Console.WriteLine("Run congee's setup again and tick the congee sensor service, or start LibreHardwareMonitor and enable Options > Remote Web Server > Run.");
+                    Console.WriteLine($"Can't read sensors at {sens.Url}: {sens.Error}");
+                    Console.WriteLine("Is the congee sensor service installed and running? Check \"congee sensors\" in services.msc, " +
+                                      "or run congee's setup again and tick it.");
                     return 1;
                 }
-                Console.WriteLine("Reading " + sens.ActiveUrl);
+                Console.WriteLine("Reading " + sens.Url);
                 foreach (var s in sens.Get())
                     Console.WriteLine($"{s.Type,-12} {s.Display,14}   {s.Path}");
                 var gpus = sens.Devices("/gpu");
@@ -136,7 +135,7 @@ public static class Program
                 Console.WriteLine();
                 for (int i = 0; i < gpus.Count; i++)
                     Console.WriteLine($"GPU {i}: {gpus[i].name}  ({gpus[i].id}){(sel?.id == gpus[i].id ? "  <- used by gpu_* variables" : "")}");
-                if (gpus.Count == 0) Console.WriteLine("No GPU found in LibreHardwareMonitor's data.");
+                if (gpus.Count == 0) Console.WriteLine("No GPU found in the sensor data.");
                 var cpus = sens.Devices("/amdcpu").Concat(sens.Devices("/intelcpu")).Concat(sens.Devices("/cpu")).ToList();
                 Console.WriteLine(cpus.Count > 0 ? $"CPU: {cpus[0].name}  ({cpus[0].id})" : "No CPU sensors found.");
                 return 0;

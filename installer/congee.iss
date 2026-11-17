@@ -2,14 +2,17 @@
 ;
 ; - An "Edition" page describes the .NET and Python editions; the user picks one.
 ; - A "Requirements" page then lists what that edition needs (.NET 10 Desktop Runtime or
-;   Python 3.12), the congee sensor service and the PawnIO driver it uses, LibreHardwareMonitor
-;   (only needed without the service), and winget, which installs the others. Installed ones
+;   Python 3.12), the congee sensor service and the PawnIO driver it uses, and winget, which
+;   installs the others. Installed ones
 ;   show ticked; tick a missing one to install it from its official source (winget, or its
 ;   download page).
 ; - The sensor service (congee-sensors, ..\sensors) reads temperatures, fans and GPU stats for
 ;   congee. It runs as a Windows service, so it is copied to Program Files and installed there
 ;   by "congee-sensors.exe --install", which Windows asks administrator permission for; that is
 ;   the only part of setup that needs admin. Uninstalling congee removes it the same way.
+; - congee no longer uses LibreHardwareMonitor. Upgrading from an older congee offers to uninstall it
+;   (OfferToRemoveLhm); setup never offers to install it. The uninstaller still offers to remove a
+;   copy that an older congee setup installed (recorded under InstalledDeps).
 ; - Installs per user (no admin needed for congee itself) into
 ;   %LOCALAPPDATA%\Programs\congee, creates %APPDATA%\congee\congee.conf if it
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
@@ -20,7 +23,7 @@
 #else
   #define AppName "congee"
 #endif
-#define AppVersion "1.2.3"
+#define AppVersion "1.2.4"
 
 [Setup]
 #ifdef TEST_INSTANCE
@@ -65,6 +68,8 @@ Name: "python"; Description: "Python edition"; Types: python
 Type: filesandordirs; Name: "{app}\python"; Components: not python
 Type: files; Name: "{group}\congee (Python edition).lnk"; Components: not python
 Type: files; Name: "{app}\congee.exe"; Components: not dotnet
+; Older versions installed a PowerShell script for stopping congee; setup does that itself now.
+Type: files; Name: "{app}\stop-congee.ps1"
 
 [Tasks]
 Name: "startup"; Description: "Start congee when I sign in to Windows"; Flags: unchecked
@@ -83,8 +88,6 @@ Source: "..\start.bat"; DestDir: "{app}\python"; Components: python; Flags: igno
 Source: "..\congee.ico"; DestDir: "{app}\python"; Components: python; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\congee.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "stop-congee.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "stop-congee.ps1"; Flags: dontcopy
 Source: "upgrade-config.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Sensor service (both editions). Setup copies it on to Program Files when installing it.
 Source: "..\sensors\publish\*"; DestDir: "{app}\sensors"; Flags: ignoreversion recursesubdirs
@@ -104,38 +107,39 @@ Name: "{userstartup}\congee"; Filename: "{app}\congee.exe"; Tasks: startup; Comp
 Name: "{userstartup}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Tasks: startup; Check: PythonIsMain
 
 [Run]
-Filename: "{code:LhmExe}"; Description: "Start LibreHardwareMonitor now (asks for admin)"; Verb: "runas"; Flags: postinstall shellexec nowait skipifsilent; Check: LhmInstalled and not SensorServiceInstalled
 Filename: "{app}\congee.exe"; Description: "Start congee now"; Flags: postinstall nowait skipifsilent; Components: dotnet; Check: HasDesktopRuntime10
 Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Description: "Start congee now"; Flags: postinstall nowait skipifsilent; Check: PythonIsMain and VenvReady
 
-[UninstallRun]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\stop-congee.ps1"""; Flags: runhidden; RunOnceId: "StopCongee"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\python\.venv"
 Type: filesandordirs; Name: "{app}\python\__pycache__"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nTemperatures, fans and GPU stats come from the congee sensor service, which starts with Windows. Without it, congee reads LibreHardwareMonitor instead.
+FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nTemperatures, fans and GPU stats come from the congee sensor service, which starts with Windows.
 
 [Code]
 const
-  DEP_LHM = 0;
   DEP_NET = 1;
   DEP_PY = 2;
   DEP_WINGET = 3;
   DEP_SVC = 4;     { congee's sensor service }
-  DEP_PAWNIO = 5;  { the driver the service (and LibreHardwareMonitor) reads CPU/motherboard sensors with }
+  DEP_PAWNIO = 5;  { the driver the service reads CPU/motherboard sensors with }
   DEP_NETRT = 6;   { .NET 10 Runtime, for the service with the Python edition }
   SVC_NAME = 'congee-sensors';
   WINGET_FLAGS = ' -e --accept-package-agreements --accept-source-agreements --disable-interactivity';
   { winget id = name of each app setup (or congee itself) installed; the uninstaller offers to remove them }
 #ifdef TEST_INSTANCE
   DEPS_KEY = 'Software\congee-uninstall-test\InstalledDeps';
+  UNINST_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{0D6A3C55-9E21-4C7B-8A44-6F1E2B3C4D5E}_is1';
+  { test build only: "removes" a winget id that doesn't exist, so the real LibreHardwareMonitor stays }
+  LHM_REMOVE_ID = 'congee.test.NotARealPackage';
 #else
   DEPS_KEY = 'Software\congee\InstalledDeps';
+  UNINST_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6C7B1E64-3F0A-4E2B-9B7C-2C0E5A1D9F43}_is1';
+  LHM_REMOVE_ID = 'LibreHardwareMonitor.LibreHardwareMonitor';
 #endif
-  URL_LHM = 'https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases';
+  LHM_ID = 'LibreHardwareMonitor.LibreHardwareMonitor';
   URL_NET = 'https://dotnet.microsoft.com/download/dotnet/10.0';
   URL_PY = 'https://www.python.org/downloads/windows/';
   URL_WINGET = 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1';  { App Installer in the Microsoft Store }
@@ -148,7 +152,14 @@ var
   DepPresent, DepChosen: array[0..6] of Boolean;
   DepRow: array[0..6] of Integer;  { which DEP_ each visible row is }
   DepRows: Integer;
-  InstallPy, InstallNet, InstallLhm, InstallWinget, InstallSvc, InstallPawnIO, InstallNetRt: Boolean;
+  InstallPy, InstallNet, InstallWinget, InstallSvc, InstallPawnIO, InstallNetRt: Boolean;
+  WasInstalled: Boolean;  { congee was already installed: this run is an upgrade }
+
+function InitializeSetup(): Boolean;
+begin
+  WasInstalled := RegKeyExists(HKCU, UNINST_KEY);
+  Result := True;
+end;
 
 { ---------------------------------------------------------------- detection }
 
@@ -272,6 +283,8 @@ begin
   end;
 end;
 
+{ LibreHardwareMonitor: congee doesn't use it any more, but older setups installed it, and the
+  uninstaller offers to remove that copy. }
 function LhmExe(Param: String): String;
 begin
   Result := FindInDir(ExpandConstant('{localappdata}\Microsoft\WinGet\Packages\LibreHardwareMonitor.LibreHardwareMonitor_*'), 'LibreHardwareMonitor.exe');
@@ -411,7 +424,6 @@ begin
     if not NetRadio.Checked then
       AddDep(DEP_NETRT, '.NET 10 Runtime (for the sensor service)', HasNetRuntime10(), 'Microsoft');
     AddDep(DEP_PAWNIO, 'PawnIO driver (lets the sensor service read CPU and motherboard sensors)', PawnIOInstalled(), 'pawnio.eu');
-    AddDep(DEP_LHM, 'LibreHardwareMonitor (optional: only needed without the sensor service)', LhmInstalled(), 'GitHub');
     AddDep(DEP_WINGET, 'winget (lets setup install the others)', WingetExe() <> '', 'Microsoft Store');
   end;
 end;
@@ -437,7 +449,6 @@ begin
     for I := 0 to DepRows - 1 do
       if not DepPresent[DepRow[I]] then DepChosen[DepRow[I]] := DepPage.CheckListBox.Checked[I];
     { Only what's on the page for this edition gets installed }
-    InstallLhm := DepTicked(DEP_LHM);
     InstallWinget := DepTicked(DEP_WINGET);
     InstallSvc := DepTicked(DEP_SVC);
     InstallPawnIO := DepTicked(DEP_PAWNIO);
@@ -499,28 +510,6 @@ begin
       OpenPage(Url);
 end;
 
-{ Turn on LHM's web server (what congee reads) the first time, if LHM has no settings yet. }
-procedure ConfigureLhm();
-var
-  Exe, Cfg: String;
-begin
-  Exe := LhmExe('');
-  if Exe = '' then Exit;
-  Cfg := ExtractFilePath(Exe) + 'LibreHardwareMonitor.config';
-  if FileExists(Cfg) then Exit;
-  SaveStringToFile(Cfg,
-    '<?xml version="1.0" encoding="utf-8"?>' + #13#10 +
-    '<configuration>' + #13#10 +
-    '  <appSettings>' + #13#10 +
-    '    <add key="runWebServerMenuItem" value="true" />' + #13#10 +
-    '    <add key="listenerPort" value="8085" />' + #13#10 +
-    '    <add key="startMinMenuItem" value="true" />' + #13#10 +
-    '    <add key="minTrayMenuItem" value="true" />' + #13#10 +
-    '    <add key="minCloseMenuItem" value="true" />' + #13#10 +
-    '  </appSettings>' + #13#10 +
-    '</configuration>' + #13#10, False);
-end;
-
 procedure SetupPythonVenv();
 var
   Py, Venv, Msg: String;
@@ -553,14 +542,44 @@ begin
 end;
 
 { Stop running copies so their files can be replaced. }
+{ Each running congee (either edition) has a hidden "congee tray" window; closing it works like
+  Exit congee (clean shutdown, tray icon removed). Anything still running after that is ended.
+  Done here rather than in a PowerShell script: a hidden script that calls Windows functions is a
+  pattern antivirus heuristics look for. }
 procedure StopRunningCongee();
 var
-  Code: Integer;
+  I, Code: Integer;
+  Wnd: HWND;
+  Locator, Wmi, Procs, P: Variant;
+  Cmd: String;
 begin
-  ExtractTemporaryFile('stop-congee.ps1');
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-       ExpandConstant('-NoProfile -ExecutionPolicy Bypass -File "{tmp}\stop-congee.ps1"'),
-       '', SW_HIDE, ewWaitUntilTerminated, Code);
+  for I := 1 to 30 do
+  begin
+    Wnd := FindWindowByWindowName('congee tray');
+    if Wnd = 0 then Break;
+    PostMessage(Wnd, 16 { WM_CLOSE }, 0, 0);
+    Sleep(100);
+  end;
+  Sleep(300);  { let them finish exiting }
+  { Leftovers (hung, or still starting up): end them }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM congee.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Wmi := Locator.ConnectServer('.', 'root\CIMV2');
+    Procs := Wmi.ExecQuery('SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = ''pythonw.exe'' OR Name = ''python.exe''');
+    for I := 0 to Procs.Count - 1 do
+    begin
+      P := Procs.ItemIndex(I);
+      if not VarIsNull(P.CommandLine) then
+      begin
+        Cmd := P.CommandLine;
+        if Pos('congee.py', Lowercase(Cmd)) > 0 then
+          P.Terminate();
+      end;
+    end;
+  except
+    Log('Could not check for a running Python edition: ' + GetExceptionMessage);
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -591,14 +610,18 @@ begin
   Result := ShellExec('runas', Exe, Action, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
-{ The copy in Program Files differs from the one this setup brought (an older version). }
+{ The copy in Program Files is a different version from the one this setup brought. build.ps1 stamps
+  the service with congee's version, so it's updated (one admin prompt) only when congee's version changes. }
 function SensorServiceOutdated(): Boolean;
 var
-  Mine, Theirs: String;
+  Mine, Theirs, VMine, VTheirs: String;
 begin
   Mine := ExpandConstant('{app}\sensors\congee-sensors.dll');
   Theirs := InstalledServiceDir() + '\congee-sensors.dll';
-  Result := not FileExists(Theirs) or (GetSHA256OfFile(Mine) <> GetSHA256OfFile(Theirs));
+  if not FileExists(Theirs) or not GetVersionNumbersString(Theirs, VTheirs) or not GetVersionNumbersString(Mine, VMine) then
+    Result := True
+  else
+    Result := VMine <> VTheirs;
 end;
 
 procedure InstallSensorService();
@@ -612,18 +635,83 @@ begin
            mbError, MB_OK);
     Exit;
   end;
-  SetStatus('Installing the congee sensor service (Windows asks for administrator permission)...');
+  if not SensorServiceInstalled() then
+    SetStatus('Installing the congee sensor service (Windows asks for administrator permission)...');
   if RunServiceSetup(ExpandConstant('{app}\sensors\congee-sensors.exe'), '--install', Code) then Exit;
-  if Code = 1223 then
+  if (Code = 1223) and SensorServiceInstalled() then
+    MsgBox('The congee sensor service wasn''t updated, because administrator permission was declined. ' +
+           'The version already installed keeps running. Run this setup again to update it.',
+           mbInformation, MB_OK)
+  else if Code = 1223 then
     MsgBox('The congee sensor service wasn''t installed, because administrator permission was declined. ' +
-           'congee still works; for temperatures and fans, run this setup again, or use LibreHardwareMonitor.',
+           'congee still works; for temperatures and fans, run this setup again.',
            mbInformation, MB_OK)
   else
     MsgBox('The congee sensor service could not be installed (exit code ' + IntToStr(Code) + '). ' +
-           'congee still works; for temperatures and fans, run this setup again, or use LibreHardwareMonitor.' + #13#10#13#10 +
+           'congee still works; for temperatures and fans, run this setup again.' + #13#10#13#10 +
            'To see the error, run in an administrator terminal:' + #13#10 +
            '  "' + ExpandConstant('{app}\sensors\congee-sensors.exe') + '" --install',
            mbError, MB_OK);
+end;
+
+{ Ends LibreHardwareMonitor so winget can remove its files. It runs as administrator, so if
+  ending it directly isn't allowed, taskkill runs as administrator (Windows asks). }
+procedure StopLhmForUninstall();
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if Code = 1 then  { access denied }
+    ShellExec('runas', ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+{ Upgrading from a congee that used LibreHardwareMonitor: offer to uninstall it, since congee's own
+  sensor service does its job now. Skipped on fresh installs (people who have it then installed it for
+  something else) and silent installs. Removed with winget when winget installed it; otherwise setup
+  says where it is, since LibreHardwareMonitor has no uninstaller of its own. }
+procedure OfferToRemoveLhm();
+var
+  Exe, Dir: String;
+  Code: Integer;
+begin
+  if WizardSilent or not WasInstalled or not LhmInstalled() then Exit;
+  Exe := LhmExe('');
+  Dir := ExtractFileDir(Exe);
+  if MsgBox('congee no longer uses LibreHardwareMonitor: its own sensor service now reads temperatures, ' +
+            'fans and GPU stats.' + #13#10#13#10 +
+            'Uninstall LibreHardwareMonitor now? Keep it if you use it for anything else.',
+            mbConfirmation, MB_YESNO) <> IDYES then
+  begin
+    Log('LibreHardwareMonitor kept');
+    Exit;
+  end;
+  SetStatus('Uninstalling LibreHardwareMonitor...');
+#ifndef TEST_INSTANCE
+  StopLhmForUninstall();
+#endif
+  if (WingetExe() <> '') and (Pos('\winget\packages\', Lowercase(Dir)) > 0) then
+  begin
+    WizardForm.ProgressGauge.Style := npbstMarquee;
+    try
+      if Exec(WingetExe(), 'uninstall --id ' + LHM_REMOVE_ID + ' -e --accept-source-agreements --disable-interactivity',
+              '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+      begin
+        RegDeleteValue(HKCU, DEPS_KEY, LHM_ID);
+        Log('LibreHardwareMonitor uninstalled');
+        Exit;
+      end;
+    finally
+      WizardForm.ProgressGauge.Style := npbstNormal;
+    end;
+    if MsgBox('LibreHardwareMonitor could not be uninstalled automatically (winget exit code ' + IntToStr(Code) + '). ' +
+              'You can remove it from Settings > Apps, or delete its folder:' + #13#10 + '  ' + Dir + #13#10#13#10 +
+              'Open that folder now?', mbError, MB_YESNO) = IDYES then
+      OpenPage(Dir);
+  end
+  else if MsgBox('LibreHardwareMonitor wasn''t installed with winget, so setup can''t uninstall it. It has no uninstaller ' +
+                 'of its own: to remove it, delete its folder:' + #13#10 + '  ' + Dir + #13#10#13#10 +
+                 'Open that folder now?', mbInformation, MB_YESNO) = IDYES then
+    OpenPage(Dir);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -640,34 +728,22 @@ begin
     if InstallPy then InstallDep('Python.Python.3.12', ' --scope user', 'Python 3.12', URL_PY);
     if InstallNetRt then InstallDep('Microsoft.DotNet.Runtime.10', '', '.NET 10 Runtime', URL_NET);
     if InstallPawnIO then InstallDep('namazso.PawnIO', '', 'PawnIO', URL_PAWNIO);
-    if InstallLhm then InstallDep('LibreHardwareMonitor.LibreHardwareMonitor', '', 'LibreHardwareMonitor', URL_LHM);
   end;
   if CurStep = ssPostInstall then
   begin
     UpgradeUserConfig();
     if WizardIsComponentSelected('python') then SetupPythonVenv();
-    ConfigureLhm();
     if InstallSvc then InstallSensorService()
     else if SensorServiceInstalled() and SensorServiceOutdated() then
     begin
       SetStatus('Updating the congee sensor service (Windows asks for administrator permission)...');
       InstallSensorService();
     end;
+    OfferToRemoveLhm();
   end;
 end;
 
 { ------------------------------------------------------------- uninstalling }
-
-{ Ends LibreHardwareMonitor so winget can remove its files. It runs as administrator, so if
-  ending it directly isn't allowed, taskkill runs as administrator (Windows asks). }
-procedure StopLhmForUninstall();
-var
-  Code: Integer;
-begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
-  if Code = 1 then  { access denied }
-    ShellExec('runas', ExpandConstant('{sys}\taskkill.exe'), '/F /IM LibreHardwareMonitor.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
-end;
 
 { Lists the apps setup or congee installed (and that are still there) with checkboxes, all
   unticked, and removes the ticked ones with winget. Skipped for silent uninstalls. }
@@ -693,7 +769,7 @@ begin
   begin
     if not RegQueryStringValue(HKCU, DEPS_KEY, Ids[I], Name) then Name := Ids[I];
     { still installed? }
-    if (Ids[I] = 'LibreHardwareMonitor.LibreHardwareMonitor') and not LhmInstalled() then Continue;
+    if (Ids[I] = LHM_ID) and not LhmInstalled() then Continue;
     if (Ids[I] = 'Microsoft.DotNet.DesktopRuntime.10') and not HasDesktopRuntime10() then Continue;
     if (Ids[I] = 'Python.Python.3.12') and (FindPython312() = '') then Continue;
     if (Ids[I] = 'namazso.PawnIO') and not PawnIOInstalled() then Continue;
@@ -726,7 +802,7 @@ begin
   Note.Width := Form.ClientWidth - ScaleX(32);
   Note.AutoSize := False; Note.WordWrap := True; Note.Height := ScaleY(32);
   Note.Caption := 'They are removed with winget. Removing the .NET runtime or PawnIO asks for administrator ' +
-                  'permission. LibreHardwareMonitor also uses PawnIO.';
+                  'permission. LibreHardwareMonitor uses PawnIO too.';
   OkBtn := TNewButton.Create(Form);
   OkBtn.Parent := Form;
   OkBtn.Caption := 'Remove ticked';
@@ -786,6 +862,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
+    StopRunningCongee();
     RemoveSensorService();
     OfferToRemoveDeps();
   end;

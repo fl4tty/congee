@@ -77,8 +77,8 @@ sealed class TrayIcon : IDisposable
         }
         else if (msg == 0x0010 /* WM_CLOSE */)
         {
-            // Setup, uninstall and stop-congee.ps1 close congee this way (then WM_DESTROY follows)
-            Log.StopReason("asked to close by another program (setup, uninstall or stop-congee.ps1)");
+            // Setup and uninstall close congee this way (then WM_DESTROY follows)
+            Log.StopReason("asked to close by another program (setup or uninstall)");
         }
         else if (msg == 0x0002 /* WM_DESTROY */)
         {

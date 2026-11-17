@@ -46,8 +46,7 @@ each with its own config (`-c other.conf`).
 | .NET 10 SDK | .NET edition, only to **build** it from source (includes the runtime) | `winget install Microsoft.DotNet.SDK.10` |
 | congee sensor service | *Recommended*: temperatures, fan speeds, GPU stats. Comes with congee | Setup installs it ([details below](#temperatures-fans-and-gpu-stats)) |
 | .NET 10 Runtime | The sensor service (already part of the .NET 10 Desktop Runtime) | `winget install Microsoft.DotNet.Runtime.10` |
-| PawnIO driver | The sensor service (or LibreHardwareMonitor), for CPU and motherboard sensors | `winget install namazso.PawnIO` |
-| LibreHardwareMonitor | *Optional*: only needed if you don't use the sensor service | `winget install LibreHardwareMonitor.LibreHardwareMonitor` ([setup below](#using-librehardwaremonitor-instead)) |
+| PawnIO driver | The sensor service, for CPU and motherboard sensors | `winget install namazso.PawnIO` |
 
 congee itself never needs admin rights. Everything except hardware sensors works without the sensor service;
 sensor lines just hide themselves or show `N/A`.
@@ -76,8 +75,6 @@ choose *More info* → *Run anyway*.
      missing; its installer asks for admin permission.
    - .NET 10 Runtime (Python edition, for the sensor service, from Microsoft). The .NET edition's Desktop Runtime
      already includes it.
-   - LibreHardwareMonitor (optional, from GitHub): only needed if you don't use the sensor service. Setup also turns
-     on its web server on port 8085, so congee can read it with no extra setup.
    - .NET 10 Desktop Runtime (.NET edition only, from Microsoft)
    - Python 3.12 (Python edition only, from python.org): installed for your user only
    - winget itself (App Installer, from the Microsoft Store), if it's missing: setup opens its Store page
@@ -91,7 +88,7 @@ choose *More info* → *Run anyway*.
    the GPU driver line. It only changes lines that still match an older default config, so your own changes stay,
    and it saves your old config as `congee.conf.bak` first. To run this yourself:
    `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\congee\upgrade-config.ps1"`.
-5. On the last page you can start congee (and, without the sensor service, LibreHardwareMonitor, which asks for admin).
+5. On the last page you can start congee.
 
 When you upgrade congee and the sensor service has changed, setup updates it too, which asks for admin permission
 again.
@@ -101,7 +98,8 @@ running congee and removes the program and the sensor service (Windows asks for 
 config** in `%APPDATA%\congee`. There's one sensor service per PC, so if several people on the PC use congee,
 uninstalling it for one removes the service for all of them; running setup again puts it back.
 
-If setup (or congee itself) installed LibreHardwareMonitor, PawnIO, Python 3.12 or a .NET 10 runtime for you,
+If setup installed PawnIO, Python 3.12 or a .NET 10 runtime for you (or LibreHardwareMonitor, which older versions
+of congee used),
 uninstalling lists them with checkboxes, all unticked, so you can remove them too. Leave them if other programs use
 them (LibreHardwareMonitor uses PawnIO too). Ticked ones are removed with winget; removing a .NET runtime or PawnIO asks for admin permission, and
 LibreHardwareMonitor is stopped first. Apps you had installed yourself aren't listed. Setup keeps track of what it
@@ -163,8 +161,7 @@ Press `Win+R`, type `shell:startup`, press Enter, and put a shortcut in that fol
 - Python edition: `start.bat`
 - .NET edition: `dotnet\publish\congee.exe`
 
-The sensor service starts with Windows on its own. If you use LibreHardwareMonitor instead, also tick
-**Options → Run On Windows Startup** in it.
+The sensor service starts with Windows on its own.
 
 ## Run
 
@@ -196,7 +193,7 @@ Command-line options (the same in both editions; Python ones run as `.venv\Scrip
   | Reload config | Re-read the config now (saving the file also does this) |
   | Reset position | Move it back to where the config places it, after dragging |
   | Logging | Turn the [log file](#log-file) on or off (checked = on). Saved in your config as `logging yes/no` |
-  | Exit congee | Stop congee (and, if you agree, LibreHardwareMonitor: see `stop_lhm`) |
+  | Exit congee | Stop congee |
 
   Windows 11 tucks new tray icons behind the **^** arrow. To keep congee's icon on the taskbar, go to
   **Settings → Personalization → Taskbar → Other system tray icons** and turn on **congee**, or drag the icon out of
@@ -293,46 +290,14 @@ doesn't run as administrator, so a small helper does that part: the **congee sen
 - It serves the readings only to this PC, on `http://127.0.0.1:8086/data.json`, in the same format as
   LibreHardwareMonitor's web server, so sensor names and paths are the same as with LHM.
 - It only reads the hardware when congee asks (at most about once a second), so with congee closed it sits idle. It
-  uses about 50 MB of memory; the LibreHardwareMonitor app uses several times that.
-- Check it works: `congee.exe --sensors` (or `.venv\Scripts\python congee.py --sensors`) says which source it reads,
-  then lists every sensor and the GPUs found. In **Services** (`services.msc`) it's listed as *congee sensors*.
+  uses about 100 MB of memory, less than half of what the LibreHardwareMonitor app uses.
+- Check it works: `congee.exe --sensors` (or `.venv\Scripts\python congee.py --sensors`) lists every sensor and the
+  GPUs found. In **Services** (`services.msc`) it's listed as *congee sensors*.
 - To install or remove it by hand, from an administrator terminal:
   `"%LOCALAPPDATA%\Programs\congee\sensors\congee-sensors.exe" --install` or `--uninstall`.
 
-With `sensors_url auto` (the default), congee reads the sensor service and, if that doesn't answer, LibreHardwareMonitor's
-web server on port 8085, whichever works; it logs which one. Set `sensors_url` to a URL to read only that.
-
-### Using LibreHardwareMonitor instead
-
-If you'd rather not install the service, congee reads
-[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (LHM) the same way:
-
-1. Install LHM: `winget install LibreHardwareMonitor.LibreHardwareMonitor`
-2. Run it (it asks for admin), then turn on **Options → Remote Web Server → Run** (default port 8085).
-3. Optional: **Options → Start Minimized**, **Minimize To Tray** and **Run On Windows Startup**.
-4. Check it works with `--sensors`.
-
-The prompts below only appear while the sensor service isn't installed; with the service, congee never starts,
-installs or stops LHM.
-
-**If LHM isn't running when congee starts**, congee offers to start it. It explains which features need LHM and gives
-you **Start it** or **Not now**, and Windows then asks for admin permission. Tick **Remember my choice** to skip the
-question next time; that sets `start_lhm yes` or `start_lhm no` in your config, and you can change it back to `ask`.
-Right after you sign in, congee waits a minute before checking, in case LHM's own *Run On Windows Startup* is about to
-start it. congee doesn't offer if `sensors_url` points at another PC.
-
-**If LHM isn't installed**, congee offers to install it instead (**Install** or **Not now**). Install runs
-`winget install --id LibreHardwareMonitor.LibreHardwareMonitor` in the background with a small progress window, turns
-on LHM's web server (port 8085, starting and closing to the tray, same as setup does), then starts it, and Windows asks
-for admin permission. If winget fails you get the exit code and the command to run yourself. Without winget, the button
-opens LHM's download page. **Remember my choice** works the same way here: remembering **Not now** sets `start_lhm no`.
-congee asks before installing even with `start_lhm yes`.
-
-**When you choose Exit congee** and LHM is running, congee asks whether to stop LHM too (**Stop it** or **Keep it
-running**, plus **Remember my choice**, which sets `stop_lhm yes` or `stop_lhm no`). Keep it running if other apps
-use LHM. LHM closes to the tray when asked politely, so congee ends it directly; if Windows doesn't allow that
-because LHM runs as administrator, Windows asks for admin permission. congee only does this on **Exit congee**:
-Windows shutting down, or setup closing congee, leaves LHM alone.
+congee (versions before 1.2.4) used the LibreHardwareMonitor app for this. It doesn't any more: you can close or
+uninstall LibreHardwareMonitor unless you use it for something else. The two can run side by side.
 
 ### Sensors in your config
 
@@ -355,7 +320,7 @@ e.g. `${sensor clock Radeon RX 7900 XTX/Clocks/GPU Core}`.
 Motherboard fan headers show up as `Fan #1`…`Fan #N`. Which header is which depends on the board, so check them
 against the BIOS. Delete lines for fans you don't have plugged in.
 
-**NVIDIA without the service or LHM:** `nvidia-smi` comes with the NVIDIA driver and needs no admin:
+**NVIDIA without the sensor service:** `nvidia-smi` comes with the NVIDIA driver and needs no admin:
 `${execi 2 nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader}`
 
 ## Settings
@@ -383,13 +348,11 @@ against the BIOS. Delete lines for fans you don't have plugged in.
 | `uppercase` | no | Show all text in capitals |
 | `dpi_scale` | auto | Scales pixel values (gaps, sizes, goto) to the display DPI. Set `1` for raw pixels |
 | `gpu` | auto | Which GPU the `gpu_*` variables read; see [above](#temperatures-fans-and-gpu-stats) |
-| `sensors_url` | auto | Where sensors are read from: `auto` (congee's sensor service, else LibreHardwareMonitor), or a `data.json` URL |
+| `sensors_url` | `http://127.0.0.1:8086/data.json` | Where the sensor service is. Any server with LibreHardwareMonitor's `data.json` format works |
 | `temp_bar_max` | 100 | °C that fill a temperature bar or graph (always °C, whatever `temperature_unit` says) |
 | `temperature_unit` | celsius | `fahrenheit` (or `f`) shows every temperature value in °F |
 | `logging` | yes | `no` stops writing `congee.log`. The tray menu's **Logging** item changes this for you |
 | `rendering` | software | .NET edition only. `software` draws with the CPU instead of setting up Direct3D on the graphics card, which saves about 30 MB in Task Manager (about 50 MB committed) with the same look and no extra CPU for a widget this size. It works the same on AMD, NVIDIA and Intel graphics. `hardware` draws with the graphics card. Takes effect when congee restarts |
-| `stop_lhm` | ask | What to do with LibreHardwareMonitor when you choose **Exit congee**: `ask`, `yes` (stop it too), or `no` (leave it running). Ignored while the sensor service is installed |
-| `start_lhm` | ask | What to do when LibreHardwareMonitor isn't running at start: `ask`, `yes` (start it; Windows asks for admin), or `no` (also stops the offer to install it). Ignored while the sensor service is installed |
 
 ## Variables
 
@@ -399,7 +362,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 |---|---|
 | CPU | `cpu [cpuN]` (%; cpu0 = total, cpu1 = first core), `cpubar [cpuN] [h,w]`, `cpugraph [cpuN] [h,w] [c1 c2]`, `freq` (MHz), `freq_g` (GHz), `cpu_name`, `cpu_cores`, `cpu_threads` |
 | CPU sensors, AMD or Intel ¹ | `cpu_temp`, `cpu_power` (W), `cpu_tempbar`, `cpu_tempgraph` |
-| GPU driver, any brand | `gpu_driver` (the version you'd look up: AMD Software/Adrenalin version, NVIDIA release like 581.57, else the Windows driver version), `gpu_driver_version` (Windows driver version), `gpu_driver_date` (YYYY-MM-DD), `gpu_driver_name`. Read from Windows, so they work without LibreHardwareMonitor |
+| GPU driver, any brand | `gpu_driver` (the version you'd look up: AMD Software/Adrenalin version, NVIDIA release like 581.57, else the Windows driver version), `gpu_driver_version` (Windows driver version), `gpu_driver_date` (YYYY-MM-DD), `gpu_driver_name`. Read from Windows, so they work without the sensor service |
 | GPU, any brand ¹ | `gpu_name`, `gpu_temp`, `gpu_hotspot`, `gpu_memtemp`, `gpu_load` (%), `gpu_clock`, `gpu_memclock` (MHz), `gpu_power` (W), `gpu_fan` (RPM), `gpu_fan_perc`, `gpu_vram_used`, `gpu_vram_total`, `gpu_vram_perc`, `gpu_sensor TYPE NAME`, `gpu_loadbar`, `gpu_loadgraph`, `gpu_tempbar [h,w] [NAME]`, `gpu_tempgraph`, `gpu_fangraph`, `gpu_vrambar` |
 | Any sensor ¹ | `temp NAME`, `fan NAME` (RPM), `sensor TYPE NAME` (types: `temperature`, `fan`, `load`, `clock`, `power`, `voltage`, `current`, `control`, `data`, `smalldata`, `throughput`, `level`…), `tempbar [h,w] NAME`, `tempgraph [h,w] NAME [c1 c2]`, `fangraph`, `loadbar`, `loadgraph`, `controlbar` |
 | Memory | `mem`, `memmax`, `memfree`, `memperc`, `membar`, `memgraph`, `swap`, `swapmax`, `swapperc`, `swapbar` |
@@ -412,7 +375,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | Layout | `color [c]`, `color0`–`color9`, `font [spec]`, `alignr`, `alignc`, `goto X`, `offset X`, `hr [h]`, `stippled_hr [h]` |
 | Conditionals | `if_up iface`, `if_running name`, `if_existing path`, `if_mounted path`, `if_battery`, `if_sensors`, `if_gpu`, `if_gpu_driver`, `if_sensor TYPE [NAME]`, `if_gpu_sensor TYPE [NAME]`, then `else` and `endif`. They can be nested |
 
-¹ Needs the sensor service (or LibreHardwareMonitor) running; otherwise shows `N/A`. Temperatures are in °C, or °F with `temperature_unit fahrenheit`.
+¹ Needs the sensor service running; otherwise shows `N/A`. Temperatures are in °C, or °F with `temperature_unit fahrenheit`.
 
 ## Troubleshooting
 
@@ -421,7 +384,7 @@ Use `$name` or `${name args}`. `$$` is a literal `$`.
 | How do I stop it? | Tray icon → **Exit congee**. If you don't see the icon, click the **^** next to the clock |
 | Nothing appears | Look for the tray icon: if it's there, try its **Show widget** and **Reset position**. Otherwise run `--once` from a terminal to see errors |
 | Two widgets drawn on top of each other | Both editions, or two copies, are running with the same config. Each has a tray icon: **Exit congee** on one |
-| Temperatures/fans show `N/A`, or "no sensor data" | Run `--sensors` to see what's wrong. The sensor service may not be installed or running (check *congee sensors* in `services.msc`, or run setup again and tick it). CPU temperatures and motherboard fans also need PawnIO. With LibreHardwareMonitor instead, check it's running with **Options → Remote Web Server → Run** on |
+| Temperatures/fans show `N/A`, or "no sensor data" | Run `--sensors` to see what's wrong. The sensor service may not be installed or running (check *congee sensors* in `services.msc`, or run setup again and tick it). CPU temperatures and motherboard fans also need PawnIO |
 | GPU section missing | `--sensors` lists the GPUs found. Check the `gpu` setting matches one, or set it back to `auto` |
 | Wrong GPU on a laptop | Set `gpu` to part of the card's name (e.g. `gpu GeForce`) or its number from `--sensors` |
 | Can't right-click it any more | `click_through yes` is set. Use the tray icon, or change it to `no` (tray icon → **Edit config**) |
@@ -435,8 +398,8 @@ Both editions write `%APPDATA%\congee\congee.log`, so you can tell why congee st
 Each line has the time, the edition and its process id. It records:
 
 - **Starts**, with the version and the config file used.
-- **Stops**, with the reason: **Exit congee** from the menu, closed by another program (setup, uninstall or
-  `stop-congee.ps1`), Windows signing out or shutting down, or the widget window closing.
+- **Stops**, with the reason: **Exit congee** from the menu, closed by another program (setup or
+  uninstall), Windows signing out or shutting down, or the widget window closing.
 - **Crashes**, with the full error.
 - **Sleep and wake, and screen lock and unlock.**
 - **Config and display errors**, once each per run.
@@ -470,7 +433,6 @@ congee\
 ├── installer\         Setup wizard (Inno Setup)
 │   ├── congee.iss         Installer script: editions, dependency page, shortcuts
 │   ├── build.ps1          Builds installer\Output\congee-setup-<version>.exe
-│   ├── stop-congee.ps1    Closes running copies before upgrade/uninstall
 │   ├── upgrade-config.ps1 Adds new features to an existing config on upgrade (saves a .bak)
 │   └── Output\            Built installer (not in git)
 ├── sensors\           The sensor service, congee-sensors (C#, used by both editions)
@@ -488,10 +450,9 @@ congee\
     ├── Evaluator.cs       Turns the template into text, bars and graphs
     ├── Config.cs          Config file search and parsing
     ├── Stats.cs           CPU, memory, disk, network, process stats
-    ├── Sensors.cs         Reads the sensor service or LibreHardwareMonitor, GPU selection
+    ├── Sensors.cs         Reads the sensor service, GPU selection
     ├── Hardware.cs        Drive list, GPU driver versions
     ├── Log.cs             congee.log: starts, stops and their reasons, crashes
-    ├── Lhm.cs             Finds, installs and starts LibreHardwareMonitor (the start_lhm prompts)
     ├── Strftime.cs        ${time} formatting
     ├── Native.cs          Windows API calls
     └── publish\congee.exe Built program (after dotnet publish)

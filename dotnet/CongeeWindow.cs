@@ -116,100 +116,13 @@ public sealed class CongeeWindow : Window
         {
             dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
             Reload();
-            // Offer to start LibreHardwareMonitor if it isn't running. Right after sign-in, wait a
-            // minute first: LHM's own "Run On Windows Startup" may still be about to start it.
-            var lhmTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Environment.TickCount64 < 180_000 ? 60 : 3) };
-            lhmTimer.Tick += (_, _) => { lhmTimer.Stop(); CheckLhm(); };
-            lhmTimer.Start();
         };
     }
 
-    /// <summary>If LibreHardwareMonitor isn't running, start it (start_lhm yes), offer to (ask), or not (no).</summary>
-    /// Not installed: offer to install it (always asks, even with start_lhm yes).
-    async void CheckLhm()
-    {
-        // CONGEE_TEST_LHM_MISSING=1 pretends it isn't running or installed, to try the install prompt.
-        bool test = Environment.GetEnvironmentVariable("CONGEE_TEST_LHM_MISSING") == "1";
-        if ((Lhm.IsRunning() && !test) || !Lhm.IsLocal(settings["sensors_url"])) return;
-        if (Lhm.ServiceInstalled(settings["sensors_url"])) return;  // congee's sensor service does LHM's job
-        string mode = settings["start_lhm"].Trim().ToLowerInvariant();
-        if (mode is "no" or "false" or "0" or "off")
-        {
-            Log.Write("LibreHardwareMonitor isn't running (start_lhm is no)");
-            return;
-        }
-        string? exe = test ? null : Lhm.FindExe();
-        if (exe == null)
-        {
-            string? winget = Lhm.WingetExe();
-            (bool install, bool remember) = Lhm.AskInstall(winget != null);
-            if (remember) RememberStartLhm(install);
-            if (!install)
-            {
-                Log.Write($"LibreHardwareMonitor isn't installed; install: \"Not now\"{(remember ? " (remembered: start_lhm no)" : "")}");
-                return;
-            }
-            if (winget == null)
-            {
-                Log.Write("LibreHardwareMonitor isn't installed and winget isn't available; opened the download page");
-                try { Shell(Lhm.ReleasesUrl); } catch (Exception) { }
-                return;
-            }
-            exe = await Lhm.InstallAsync(winget);
-            if (exe != null && !Lhm.IsRunning()) Lhm.Start(exe);
-            return;
-        }
-        bool start = true;
-        if (!Config.Yes(mode))  // ask
-        {
-            (start, bool remember) = Lhm.Ask();
-            if (remember) RememberStartLhm(start);
-            if (!start) Log.Write($"LibreHardwareMonitor not started: \"Not now\"{(remember ? " (remembered: start_lhm no)" : "")}");
-        }
-        if (start) Lhm.Start(exe);
-    }
-
-    /// <summary>Exit congee from the tray menu: also stop LibreHardwareMonitor if stop_lhm says so (or the
-    /// user agrees). Only here: Windows shutting down or setup closing congee leave LHM alone.</summary>
     void ExitFromMenu()
     {
         Log.StopReason("Exit congee chosen from the menu");
-        try { StopLhmOnExit(); } catch (Exception e) { Log.Write("LibreHardwareMonitor check on exit failed: " + e.Message); }
         Application.Current.Shutdown();
-    }
-
-    void StopLhmOnExit()
-    {
-        if (!Lhm.IsRunning() || !Lhm.IsLocal(settings["sensors_url"])) return;
-        if (Lhm.ServiceInstalled(settings["sensors_url"])) return;  // then LHM isn't running for congee
-        string mode = settings["stop_lhm"].Trim().ToLowerInvariant();
-        if (mode is "no" or "false" or "0" or "off") return;
-        bool stop = true;
-        if (!Config.Yes(mode))  // ask
-        {
-            (stop, bool remember) = Lhm.AskStop();
-            if (remember)
-            {
-                try
-                {
-                    Config.SetSetting(configPath, "stop_lhm", stop ? "yes" : "no",
-                        "Stop LibreHardwareMonitor too when you choose Exit congee: ask, yes or no");
-                }
-                catch (Exception) { }
-            }
-            if (!stop) Log.Write($"LibreHardwareMonitor left running: \"Keep it running\"{(remember ? " (remembered: stop_lhm no)" : "")}");
-        }
-        if (stop) Lhm.Stop();
-    }
-
-    void RememberStartLhm(bool yes)
-    {
-        try
-        {
-            Config.SetSetting(configPath, "start_lhm", yes ? "yes" : "no",
-                "Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no");
-        }
-        catch (Exception) { }
     }
 
     /// <summary>Flips the "logging" setting in the config file (so it sticks) and applies it.</summary>

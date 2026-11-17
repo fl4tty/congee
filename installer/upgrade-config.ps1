@@ -8,12 +8,11 @@
 #
 #   1.2.0  temperature_unit setting; ${temp_unit} instead of a fixed degrees-C sign;
 #          GPU driver line; every drive (with its own read/write) instead of only C:
-#   1.2.2  logging setting (yes; the tray menu's Logging item switches it);
-#          start_lhm setting (ask: offer to start LibreHardwareMonitor if it isn't running)
+#   1.2.2  logging setting (yes; the tray menu's Logging item switches it)
 #   1.2.3  rendering setting (software: the .NET edition draws with the CPU, using less memory)
-#   1.2.4  stop_lhm setting (ask: on Exit congee, offer to stop LibreHardwareMonitor too);
-#          the no-sensors hint no longer says to start LibreHardwareMonitor (congee's own sensor
-#          service is the default now)
+#   1.2.4  congee's own sensor service replaces LibreHardwareMonitor: the start_lhm / stop_lhm
+#          settings (and their comments) are removed, and the no-sensors hint no longer says to
+#          start LibreHardwareMonitor
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -47,23 +46,6 @@ if ($text -notmatch '(?m)^\s*logging\b' -and $text -match '(?m)^TEXT\s*$') {
     $changes.Add('added the logging setting (on; switch it from the tray menu)')
 }
 
-# --- start_lhm setting, just above TEXT ------------------------------------------------------
-if ($text -notmatch '(?m)^\s*start_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
-    $block = "# Start LibreHardwareMonitor (needed for temperatures, fans and GPU stats) if it isn't`n" +
-             "# running when congee starts: ask, yes (start it; Windows asks for admin permission) or no.`n" +
-             "start_lhm ask`n`n"
-    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
-    $changes.Add('added the start_lhm setting (congee offers to start LibreHardwareMonitor when it is not running)')
-}
-
-# --- stop_lhm setting, just above TEXT -------------------------------------------------------
-if ($text -notmatch '(?m)^\s*stop_lhm\b' -and $text -match '(?m)^TEXT\s*$') {
-    $block = "# When you choose Exit congee, also stop LibreHardwareMonitor: ask, yes or no.`n" +
-             "stop_lhm ask`n`n"
-    $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
-    $changes.Add('added the stop_lhm setting (on Exit congee, offers to stop LibreHardwareMonitor too)')
-}
-
 # --- rendering setting, just above TEXT ------------------------------------------------------
 if ($text -notmatch '(?m)^\s*rendering\b' -and $text -match '(?m)^TEXT\s*$') {
     $block = "# .NET edition only: draw with the CPU (software, uses less memory) or the graphics card`n" +
@@ -71,6 +53,37 @@ if ($text -notmatch '(?m)^\s*rendering\b' -and $text -match '(?m)^TEXT\s*$') {
              "rendering software`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the rendering setting (software: the .NET edition uses less memory)')
+}
+
+# --- start_lhm / stop_lhm: gone with LibreHardwareMonitor -----------------------------------
+# Removes those settings (whatever their value) and the comment lines congee wrote above them,
+# plus one blank line after, but only in the settings part (above TEXT).
+$lhmComments = @(
+    "# Start LibreHardwareMonitor (needed for temperatures, fans and GPU stats) if it isn't",
+    "# running when congee starts: ask, yes (start it; Windows asks for admin permission) or no.",
+    "# When you choose Exit congee, also stop LibreHardwareMonitor: ask, yes or no.",
+    "# Start LibreHardwareMonitor with congee if it isn't running: ask, yes or no",
+    "# Stop LibreHardwareMonitor too when you choose Exit congee: ask, yes or no")
+$m = [regex]::Match($text, '(?m)^TEXT\s*$')
+if ($m.Success) {
+    $head = $text.Substring(0, $m.Index)
+    $lines = New-Object Collections.Generic.List[string]
+    $dropBlank = $false
+    $removed = $false
+    foreach ($l in $head.Split("`n")) {
+        if ($lhmComments -contains $l.TrimEnd() -or $l -match '^\s*(start_lhm|stop_lhm)\b') {
+            $removed = $true
+            $dropBlank = $l -match '^\s*(start_lhm|stop_lhm)\b'
+            continue
+        }
+        if ($dropBlank -and $l.Trim() -eq '') { $dropBlank = $false; continue }
+        $dropBlank = $false
+        $lines.Add($l)
+    }
+    if ($removed) {
+        $text = [string]::Join("`n", $lines) + $text.Substring($m.Index)
+        $changes.Add('removed the start_lhm / stop_lhm settings (congee no longer uses LibreHardwareMonitor)')
+    }
 }
 
 # --- no-sensors hint: congee's sensor service replaces LibreHardwareMonitor ------------------

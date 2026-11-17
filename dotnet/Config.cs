@@ -33,12 +33,10 @@ public static class Config
         ["monitor"] = "0",
         ["uppercase"] = "no",
         ["dpi_scale"] = "auto",
-        ["sensors_url"] = "auto",          // auto: congee's sensor service, else LibreHardwareMonitor; or a data.json URL
+        ["sensors_url"] = "http://127.0.0.1:8086/data.json",  // congee's sensor service (congee-sensors)
         ["temp_bar_max"] = "100",          // °C that count as a full tempbar/tempgraph
         ["temperature_unit"] = "celsius",  // or fahrenheit: how temperature values are shown
         ["gpu"] = "auto",
-        ["stop_lhm"] = "ask",              // on Exit congee, also stop LibreHardwareMonitor: ask, yes or no
-        ["start_lhm"] = "ask",             // start LibreHardwareMonitor if it isn't running: ask, yes or no
         ["logging"] = "yes",               // write congee.log (starts, stops, crashes) to %APPDATA%\congee
         ["rendering"] = "software",        // draw with the CPU (software) or the graphics card (hardware); needs a restart
     };
