@@ -122,10 +122,13 @@ public static class Program
                 sens.RefreshNow();
                 if (!sens.Ok)
                 {
-                    Console.WriteLine($"Can't reach LibreHardwareMonitor at {sens.Url}: {sens.Error}");
-                    Console.WriteLine("Start LibreHardwareMonitor and enable Options > Remote Web Server > Run.");
+                    Console.WriteLine(sens.IsAuto
+                        ? $"No sensor data: neither congee's sensor service ({Sensors.ServiceUrl}) nor LibreHardwareMonitor ({Sensors.LhmUrl}) answered: {sens.Error}"
+                        : $"Can't read sensors at {sens.Url}: {sens.Error}");
+                    Console.WriteLine("Run congee's setup again and tick the congee sensor service, or start LibreHardwareMonitor and enable Options > Remote Web Server > Run.");
                     return 1;
                 }
+                Console.WriteLine("Reading " + sens.ActiveUrl);
                 foreach (var s in sens.Get())
                     Console.WriteLine($"{s.Type,-12} {s.Display,14}   {s.Path}");
                 var gpus = sens.Devices("/gpu");

@@ -21,6 +21,20 @@ static class Lhm
 
     public static bool IsRunning() => Process.GetProcessesByName(ProcName).Length > 0;
 
+    /// <summary>True when congee's own sensor service (congee-sensors) is installed: then congee reads
+    /// that instead (sensors_url auto), and never needs to start, install or stop LibreHardwareMonitor.
+    /// CONGEE_TEST_NO_SERVICE=1 pretends it isn't, to try the LibreHardwareMonitor prompts.</summary>
+    public static bool ServiceInstalled(string sensorsUrl)
+    {
+        if (!Sensors.IsAutoUrl(sensorsUrl) || Environment.GetEnvironmentVariable("CONGEE_TEST_NO_SERVICE") == "1") return false;
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\congee-sensors");
+            return k != null;
+        }
+        catch (Exception) { return false; }
+    }
+
     /// <summary>LibreHardwareMonitor.exe from a winget install (per user or machine), Program Files,
     /// or wherever Windows' installed-apps list says it is; null if it isn't installed.</summary>
     public static string? FindExe()
@@ -78,7 +92,7 @@ static class Lhm
     }
 
     /// <summary>True when sensors_url points at this PC (otherwise LHM runs somewhere else).</summary>
-    public static bool IsLocal(string sensorsUrl) =>
+    public static bool IsLocal(string sensorsUrl) => Sensors.IsAutoUrl(sensorsUrl) ||
         Uri.TryCreate(sensorsUrl.Trim(), UriKind.Absolute, out var u) &&
         (u.IsLoopback || u.Host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase));
 

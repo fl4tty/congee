@@ -131,6 +131,7 @@ public sealed class CongeeWindow : Window
         // CONGEE_TEST_LHM_MISSING=1 pretends it isn't running or installed, to try the install prompt.
         bool test = Environment.GetEnvironmentVariable("CONGEE_TEST_LHM_MISSING") == "1";
         if ((Lhm.IsRunning() && !test) || !Lhm.IsLocal(settings["sensors_url"])) return;
+        if (Lhm.ServiceInstalled(settings["sensors_url"])) return;  // congee's sensor service does LHM's job
         string mode = settings["start_lhm"].Trim().ToLowerInvariant();
         if (mode is "no" or "false" or "0" or "off")
         {
@@ -180,6 +181,7 @@ public sealed class CongeeWindow : Window
     void StopLhmOnExit()
     {
         if (!Lhm.IsRunning() || !Lhm.IsLocal(settings["sensors_url"])) return;
+        if (Lhm.ServiceInstalled(settings["sensors_url"])) return;  // then LHM isn't running for congee
         string mode = settings["stop_lhm"].Trim().ToLowerInvariant();
         if (mode is "no" or "false" or "0" or "off") return;
         bool stop = true;

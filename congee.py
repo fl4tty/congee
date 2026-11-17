@@ -188,7 +188,7 @@ DEFAULTS = {
     "monitor": "0",  # 0 = primary, 1.. = others
     "uppercase": "no",
     "dpi_scale": "auto",  # auto, or a number like 1.0 / 1.5
-    "sensors_url": "http://localhost:8085/data.json",  # LibreHardwareMonitor web server
+    "sensors_url": "auto",  # auto: congee's sensor service, else LibreHardwareMonitor; or a data.json URL
     "temp_bar_max": "100",  # °C that count as a full tempbar/tempgraph
     "temperature_unit": "celsius",  # or fahrenheit: how temperature values are shown
     "gpu": "auto",  # which GPU the gpu_* variables read: auto, 0/1/..., or part of its name
@@ -421,13 +421,26 @@ DEVICE_WIDGETS = {  # widget -> the variable it draws
 }
 
 
+SERVICE_URL = "http://127.0.0.1:8086/data.json"  # congee-sensors, the Windows service setup installs
+LHM_URL = "http://localhost:8085/data.json"  # LibreHardwareMonitor's web server
+
+
+def is_auto_url(url: str) -> bool:
+    return url.strip().lower() in ("auto", "")
+
+
 class Sensors:
-    """Polls LibreHardwareMonitor's built-in web server (Options > Remote Web
-    Server) in a background thread. Reading needs no admin rights; LHM itself
-    runs elevated and does the hardware access."""
+    """Polls sensor JSON over localhost in a background thread, so congee needs no admin rights.
+    sensors_url "auto" (the default) reads congee's own sensor service (congee-sensors) and falls
+    back to LibreHardwareMonitor's web server (Options > Remote Web Server); both serve the same
+    format. Any other value is the one URL to read."""
+
+    AUTO_URLS = (SERVICE_URL, LHM_URL)
 
     def __init__(self):
-        self.url = "http://localhost:8085/data.json"
+        self.url = "auto"
+        self.auto_idx = 0
+        self.last_source = None
         self.interval = 1.0
         self.items: list[dict] = []
         self.ok = False
@@ -440,7 +453,7 @@ class Sensors:
 
     def configure(self, url: str, interval: float):
         if url != self.url:
-            self.items, self.ok, self.last, self.seen = [], False, -1e9, {}
+            self.items, self.ok, self.last, self.seen, self.auto_idx = [], False, -1e9, {}, 0
         self.url, self.interval = url, max(0.5, interval)
 
     def get(self) -> list[dict]:
@@ -449,6 +462,15 @@ class Sensors:
             self.busy, self.last = True, time.monotonic()
             threading.Thread(target=self._refresh, daemon=True).start()
         return self.items
+
+    @property
+    def is_auto(self) -> bool:
+        return is_auto_url(self.url)
+
+    @property
+    def active_url(self) -> str:
+        """The URL being read: in auto mode, whichever source answered last."""
+        return self.AUTO_URLS[self.auto_idx] if self.is_auto else self.url
 
     def refresh_now(self):
         self.busy = True
@@ -459,8 +481,21 @@ class Sensors:
         import json
         import urllib.request
         try:
-            with urllib.request.urlopen(self.url, timeout=2) as r:
-                tree = json.loads(r.read().decode("utf-8", "replace"))
+            def fetch(url):
+                with urllib.request.urlopen(url, timeout=2) as r:
+                    return json.loads(r.read().decode("utf-8", "replace"))
+            if not self.is_auto:
+                tree = fetch(self.url)
+            else:  # try the source that answered last, then the other one
+                try:
+                    tree = fetch(self.AUTO_URLS[self.auto_idx])
+                except Exception:  # noqa: BLE001
+                    self.auto_idx = (self.auto_idx + 1) % len(self.AUTO_URLS)
+                    tree = fetch(self.AUTO_URLS[self.auto_idx])
+                if self.active_url != self.last_source:
+                    self.last_source = self.active_url
+                    Log.write("sensors: reading " + ("congee's sensor service" if self.auto_idx == 0 else "LibreHardwareMonitor")
+                              + f" ({self.active_url})")
             fresh: list[dict] = []
             self._walk(tree, [], None, fresh)
             # Some sensors (e.g. AMD GPU ones) briefly vanish from LHM's feed;
@@ -1634,9 +1669,25 @@ def start_lhm(exe: str) -> bool:
 
 def lhm_is_local(sensors_url: str) -> bool:
     """True when sensors_url points at this PC (otherwise LHM runs somewhere else)."""
+    if is_auto_url(sensors_url):
+        return True
     from urllib.parse import urlparse
     host = (urlparse(sensors_url.strip()).hostname or "").lower()
     return host in ("localhost", "127.0.0.1", "::1") or host == socket.gethostname().lower()
+
+
+def sensor_service_installed(sensors_url: str) -> bool:
+    """True when congee's own sensor service (congee-sensors) is installed: then congee reads that
+    instead (sensors_url auto) and never needs to start, install or stop LibreHardwareMonitor.
+    CONGEE_TEST_NO_SERVICE=1 pretends it isn't, to try the LibreHardwareMonitor prompts."""
+    if not is_auto_url(sensors_url) or os.environ.get("CONGEE_TEST_NO_SERVICE") == "1":
+        return False
+    import winreg
+    try:
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\congee-sensors"))
+        return True
+    except OSError:
+        return False
 
 
 def lhm_dialog(root, heading: str, text: str, yes_label: str, no_label: str = "Not now") -> tuple[bool, bool]:
@@ -2143,6 +2194,8 @@ class Congee:
         test = os.environ.get("CONGEE_TEST_LHM_MISSING") == "1"
         if (lhm_running() and not test) or not lhm_is_local(self.settings["sensors_url"]):
             return
+        if sensor_service_installed(self.settings["sensors_url"]):
+            return  # congee's sensor service does LHM's job
         mode = self.settings["start_lhm"].strip().lower()
         if mode in ("no", "false", "0", "off"):
             Log.write("LibreHardwareMonitor isn't running (start_lhm is no)")
@@ -2194,6 +2247,8 @@ class Congee:
     def stop_lhm_on_exit(self):
         if not lhm_running() or not lhm_is_local(self.settings["sensors_url"]):
             return
+        if sensor_service_installed(self.settings["sensors_url"]):
+            return  # then LHM isn't running for congee
         mode = self.settings["stop_lhm"].strip().lower()
         if mode in ("no", "false", "0", "off"):
             return
@@ -2573,9 +2628,15 @@ def main():
         sens.configure(settings["sensors_url"], 1.0)
         sens.refresh_now()
         if not sens.ok:
-            print(f"Can't reach LibreHardwareMonitor at {sens.url}: {sens.error}")
-            print("Start LibreHardwareMonitor and enable Options > Remote Web Server > Run.")
+            if sens.is_auto:
+                print(f"No sensor data: neither congee's sensor service ({SERVICE_URL}) nor "
+                      f"LibreHardwareMonitor ({LHM_URL}) answered: {sens.error}")
+            else:
+                print(f"Can't read sensors at {sens.url}: {sens.error}")
+            print("Run congee's setup again and tick the congee sensor service, or start "
+                  "LibreHardwareMonitor and enable Options > Remote Web Server > Run.")
             return
+        print("Reading " + sens.active_url)
         for s in sens.items:
             print(f"{s['type']:12} {s['display']:>14}   {s['path']}")
         gpus = sens.devices("/gpu")

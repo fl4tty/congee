@@ -1,6 +1,7 @@
 # Builds congee-setup-<version>.exe into installer\Output.
 #   1. publishes the .NET edition (dotnet\publish\congee.exe)
-#   2. compiles installer\congee.iss with Inno Setup 6
+#   2. publishes the sensor service (sensors\publish\congee-sensors.exe, used by both editions)
+#   3. compiles installer\congee.iss with Inno Setup 6
 # Needs: .NET 10 SDK (winget install Microsoft.DotNet.SDK.10)
 #        Inno Setup 6  (winget install JRSoftware.InnoSetup)
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,15 @@ Push-Location (Join-Path $root 'dotnet')
 try {
     dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
     if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+} finally { Pop-Location }
+
+Write-Host '== Publishing the sensor service'
+Push-Location (Join-Path $root 'sensors')
+try {
+    if (Test-Path publish) { Remove-Item -Recurse -Force publish }
+    dotnet publish -c Release -o publish
+    if ($LASTEXITCODE -ne 0) { throw 'dotnet publish (sensors) failed' }
+    Remove-Item publish\*.pdb -ErrorAction SilentlyContinue
 } finally { Pop-Location }
 
 $iscc = @(

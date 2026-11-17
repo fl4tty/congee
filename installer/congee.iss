@@ -2,9 +2,14 @@
 ;
 ; - An "Edition" page describes the .NET and Python editions; the user picks one.
 ; - A "Requirements" page then lists what that edition needs (.NET 10 Desktop Runtime or
-;   Python 3.12), LibreHardwareMonitor, and winget, which installs the others. Installed ones
+;   Python 3.12), the congee sensor service and the PawnIO driver it uses, LibreHardwareMonitor
+;   (only needed without the service), and winget, which installs the others. Installed ones
 ;   show ticked; tick a missing one to install it from its official source (winget, or its
 ;   download page).
+; - The sensor service (congee-sensors, ..\sensors) reads temperatures, fans and GPU stats for
+;   congee. It runs as a Windows service, so it is copied to Program Files and installed there
+;   by "congee-sensors.exe --install", which Windows asks administrator permission for; that is
+;   the only part of setup that needs admin. Uninstalling congee removes it the same way.
 ; - Installs per user (no admin needed for congee itself) into
 ;   %LOCALAPPDATA%\Programs\congee, creates %APPDATA%\congee\congee.conf if it
 ;   doesn't exist yet, and adds Start menu / optional sign-in shortcuts.
@@ -81,6 +86,8 @@ Source: "..\congee.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-congee.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-congee.ps1"; Flags: dontcopy
 Source: "upgrade-config.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; Sensor service (both editions). Setup copies it on to Program Files when installing it.
+Source: "..\sensors\publish\*"; DestDir: "{app}\sensors"; Flags: ignoreversion recursesubdirs
 ; The user's own config: created once, never overwritten or removed
 Source: "..\congee.conf"; DestDir: "{userappdata}\congee"; Flags: onlyifdoesntexist uninsneveruninstall
 
@@ -97,7 +104,7 @@ Name: "{userstartup}\congee"; Filename: "{app}\congee.exe"; Tasks: startup; Comp
 Name: "{userstartup}\congee"; Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; IconFilename: "{app}\python\congee.ico"; Tasks: startup; Check: PythonIsMain
 
 [Run]
-Filename: "{code:LhmExe}"; Description: "Start LibreHardwareMonitor now (asks for admin)"; Verb: "runas"; Flags: postinstall shellexec nowait skipifsilent; Check: LhmInstalled
+Filename: "{code:LhmExe}"; Description: "Start LibreHardwareMonitor now (asks for admin)"; Verb: "runas"; Flags: postinstall shellexec nowait skipifsilent; Check: LhmInstalled and not SensorServiceInstalled
 Filename: "{app}\congee.exe"; Description: "Start congee now"; Flags: postinstall nowait skipifsilent; Components: dotnet; Check: HasDesktopRuntime10
 Filename: "{app}\python\.venv\Scripts\pythonw.exe"; Parameters: """{app}\python\congee.py"""; WorkingDir: "{app}\python"; Description: "Start congee now"; Flags: postinstall nowait skipifsilent; Check: PythonIsMain and VenvReady
 
@@ -109,7 +116,7 @@ Type: filesandordirs; Name: "{app}\python\.venv"
 Type: filesandordirs; Name: "{app}\python\__pycache__"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nFor temperatures and fans after a reboot, tick Options → Run On Windows Startup in LibreHardwareMonitor.
+FinishedLabel=Setup has installed [name] on your computer.%n%nYour config file is %APPDATA%\congee\congee.conf (Start menu → "Edit congee config"). Save it and the widget updates on its own.%n%nTemperatures, fans and GPU stats come from the congee sensor service, which starts with Windows. Without it, congee reads LibreHardwareMonitor instead.
 
 [Code]
 const
@@ -117,6 +124,10 @@ const
   DEP_NET = 1;
   DEP_PY = 2;
   DEP_WINGET = 3;
+  DEP_SVC = 4;     { congee's sensor service }
+  DEP_PAWNIO = 5;  { the driver the service (and LibreHardwareMonitor) reads CPU/motherboard sensors with }
+  DEP_NETRT = 6;   { .NET 10 Runtime, for the service with the Python edition }
+  SVC_NAME = 'congee-sensors';
   WINGET_FLAGS = ' -e --accept-package-agreements --accept-source-agreements --disable-interactivity';
   { winget id = name of each app setup (or congee itself) installed; the uninstaller offers to remove them }
 #ifdef TEST_INSTANCE
@@ -128,15 +139,16 @@ const
   URL_NET = 'https://dotnet.microsoft.com/download/dotnet/10.0';
   URL_PY = 'https://www.python.org/downloads/windows/';
   URL_WINGET = 'ms-windows-store://pdp/?productid=9NBLGGH4NNS1';  { App Installer in the Microsoft Store }
+  URL_PAWNIO = 'https://pawnio.eu/';
 
 var
   EditionPage: TWizardPage;
   NetRadio, PyRadio: TNewRadioButton;
   DepPage: TInputOptionWizardPage;
-  DepPresent, DepChosen: array[0..3] of Boolean;
-  DepRow: array[0..3] of Integer;  { which DEP_ each visible row is }
+  DepPresent, DepChosen: array[0..6] of Boolean;
+  DepRow: array[0..6] of Integer;  { which DEP_ each visible row is }
   DepRows: Integer;
-  InstallPy, InstallNet, InstallLhm, InstallWinget: Boolean;
+  InstallPy, InstallNet, InstallLhm, InstallWinget, InstallSvc, InstallPawnIO, InstallNetRt: Boolean;
 
 { ---------------------------------------------------------------- detection }
 
@@ -202,6 +214,41 @@ begin
   Result := FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.WindowsDesktop.App\10.*'), FR);
   if Result then
     FindClose(FR);
+end;
+
+{ The plain .NET 10 Runtime (part of the Desktop Runtime too): what the sensor service needs. }
+function HasNetRuntime10(): Boolean;
+var
+  FR: TFindRec;
+begin
+#ifdef SIMULATE_MISSING
+  Result := False; Exit;
+#endif
+  Result := FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.NETCore.App\10.*'), FR);
+  if Result then
+    FindClose(FR);
+end;
+
+function SensorServiceInstalled(): Boolean;
+begin
+#ifdef SIMULATE_MISSING
+  Result := False; Exit;
+#endif
+  Result := RegKeyExists(HKLM64, 'SYSTEM\CurrentControlSet\Services\' + SVC_NAME);
+end;
+
+function PawnIOInstalled(): Boolean;
+begin
+#ifdef SIMULATE_MISSING
+  Result := False; Exit;
+#endif
+  Result := RegKeyExists(HKLM64, 'SYSTEM\CurrentControlSet\Services\PawnIO');
+end;
+
+{ Where --install puts the service (admin-only folder, since it runs as LocalSystem). }
+function InstalledServiceDir(): String;
+begin
+  Result := ExpandConstant('{commonpf64}\congee\sensors');
 end;
 
 function FindInDir(Pattern, ExeName: String): String;
@@ -282,7 +329,8 @@ end;
 function DepIntro(Net, Winget: Boolean): String;
 begin
   if Net then Result := 'What the .NET edition needs. ' else Result := 'What the Python edition needs. ';
-  Result := Result + 'Ticked items are already installed. ';
+  Result := Result + 'Ticked items are already installed. The sensor service and PawnIO need administrator ' +
+            'permission once, which Windows asks for. ';
   if Winget then
     Result := Result + 'Tick anything missing that you want, and setup installs it with winget from its ' +
               'official source when you click Install, each under its own license.'
@@ -314,6 +362,10 @@ begin
   { Pre-select what's installed (or passed with /COMPONENTS): Python only if .NET isn't picked }
   PyRadio.Checked := WizardIsComponentSelected('python') and not WizardIsComponentSelected('dotnet');
   NetRadio.Checked := not PyRadio.Checked;
+  { Recommended, so ticked when missing (the user can untick them) }
+  DepChosen[DEP_SVC] := True;
+  DepChosen[DEP_PAWNIO] := True;
+  DepChosen[DEP_NETRT] := True;
 
   { The intro is set per edition when the page shows; the longest version is given here so the
     page leaves room for it above the list. }
@@ -327,15 +379,20 @@ begin
 end;
 
 { One row: installed = ticked and greyed out; missing = the user's choice, with where it comes from. }
-procedure AddDep(Dep: Integer; Caption: String; Present: Boolean; Source: String);
+procedure AddDepSub(Dep: Integer; Caption: String; Present: Boolean; Missing: String);
 var
   Sub: String;
 begin
   DepPresent[Dep] := Present;
-  if Present then Sub := 'Installed' else Sub := 'Missing - from ' + Source;
+  if Present then Sub := 'Installed' else Sub := Missing;
   DepPage.CheckListBox.AddCheckBox(Caption, Sub, 0, Present or DepChosen[Dep], not Present, False, False, nil);
   DepRow[DepRows] := Dep;
   DepRows := DepRows + 1;
+end;
+
+procedure AddDep(Dep: Integer; Caption: String; Present: Boolean; Source: String);
+begin
+  AddDepSub(Dep, Caption, Present, 'Missing - from ' + Source);
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -349,7 +406,12 @@ begin
       AddDep(DEP_NET, '.NET 10 Desktop Runtime (required)', HasDesktopRuntime10(), 'Microsoft')
     else
       AddDep(DEP_PY, 'Python 3.12 (required)', FindPython312() <> '', 'python.org');
-    AddDep(DEP_LHM, 'LibreHardwareMonitor (optional: temperatures, fans, GPU stats)', LhmInstalled(), 'GitHub');
+    AddDepSub(DEP_SVC, 'congee sensor service (recommended: temperatures, fans, GPU stats)', SensorServiceInstalled(),
+              'Missing - comes with congee');
+    if not NetRadio.Checked then
+      AddDep(DEP_NETRT, '.NET 10 Runtime (for the sensor service)', HasNetRuntime10(), 'Microsoft');
+    AddDep(DEP_PAWNIO, 'PawnIO driver (lets the sensor service read CPU and motherboard sensors)', PawnIOInstalled(), 'pawnio.eu');
+    AddDep(DEP_LHM, 'LibreHardwareMonitor (optional: only needed without the sensor service)', LhmInstalled(), 'GitHub');
     AddDep(DEP_WINGET, 'winget (lets setup install the others)', WingetExe() <> '', 'Microsoft Store');
   end;
 end;
@@ -377,6 +439,9 @@ begin
     { Only what's on the page for this edition gets installed }
     InstallLhm := DepTicked(DEP_LHM);
     InstallWinget := DepTicked(DEP_WINGET);
+    InstallSvc := DepTicked(DEP_SVC);
+    InstallPawnIO := DepTicked(DEP_PAWNIO);
+    InstallNetRt := PyRadio.Checked and DepTicked(DEP_NETRT);
     InstallNet := NetRadio.Checked and DepTicked(DEP_NET);
     InstallPy := PyRadio.Checked and DepTicked(DEP_PY);
     Name := '';
@@ -515,6 +580,52 @@ begin
        '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ Runs congee-sensors.exe --install or --uninstall as administrator (Windows asks). Exit codes:
+  0 done, 1 failed, 5 not admin; 1223 = the admin prompt was declined. }
+function RunServiceSetup(Exe, Action: String; var Code: Integer): Boolean;
+begin
+  Code := -1;
+#ifdef TEST_INSTANCE
+  Result := True; Code := 0; Exit;  { test build only: never touch the real service }
+#endif
+  Result := ShellExec('runas', Exe, Action, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+{ The copy in Program Files differs from the one this setup brought (an older version). }
+function SensorServiceOutdated(): Boolean;
+var
+  Mine, Theirs: String;
+begin
+  Mine := ExpandConstant('{app}\sensors\congee-sensors.dll');
+  Theirs := InstalledServiceDir() + '\congee-sensors.dll';
+  Result := not FileExists(Theirs) or (GetSHA256OfFile(Mine) <> GetSHA256OfFile(Theirs));
+end;
+
+procedure InstallSensorService();
+var
+  Code: Integer;
+begin
+  if not HasNetRuntime10() then
+  begin
+    MsgBox('The congee sensor service needs the .NET 10 Runtime, which isn''t installed, so the service ' +
+           'wasn''t set up. Install it (winget install Microsoft.DotNet.Runtime.10), then run this setup again.',
+           mbError, MB_OK);
+    Exit;
+  end;
+  SetStatus('Installing the congee sensor service (Windows asks for administrator permission)...');
+  if RunServiceSetup(ExpandConstant('{app}\sensors\congee-sensors.exe'), '--install', Code) then Exit;
+  if Code = 1223 then
+    MsgBox('The congee sensor service wasn''t installed, because administrator permission was declined. ' +
+           'congee still works; for temperatures and fans, run this setup again, or use LibreHardwareMonitor.',
+           mbInformation, MB_OK)
+  else
+    MsgBox('The congee sensor service could not be installed (exit code ' + IntToStr(Code) + '). ' +
+           'congee still works; for temperatures and fans, run this setup again, or use LibreHardwareMonitor.' + #13#10#13#10 +
+           'To see the error, run in an administrator terminal:' + #13#10 +
+           '  "' + ExpandConstant('{app}\sensors\congee-sensors.exe') + '" --install',
+           mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
@@ -527,6 +638,8 @@ begin
     end;
     if InstallNet then InstallDep('Microsoft.DotNet.DesktopRuntime.10', '', '.NET 10 Desktop Runtime', URL_NET);
     if InstallPy then InstallDep('Python.Python.3.12', ' --scope user', 'Python 3.12', URL_PY);
+    if InstallNetRt then InstallDep('Microsoft.DotNet.Runtime.10', '', '.NET 10 Runtime', URL_NET);
+    if InstallPawnIO then InstallDep('namazso.PawnIO', '', 'PawnIO', URL_PAWNIO);
     if InstallLhm then InstallDep('LibreHardwareMonitor.LibreHardwareMonitor', '', 'LibreHardwareMonitor', URL_LHM);
   end;
   if CurStep = ssPostInstall then
@@ -534,6 +647,12 @@ begin
     UpgradeUserConfig();
     if WizardIsComponentSelected('python') then SetupPythonVenv();
     ConfigureLhm();
+    if InstallSvc then InstallSensorService()
+    else if SensorServiceInstalled() and SensorServiceOutdated() then
+    begin
+      SetStatus('Updating the congee sensor service (Windows asks for administrator permission)...');
+      InstallSensorService();
+    end;
   end;
 end;
 
@@ -577,6 +696,8 @@ begin
     if (Ids[I] = 'LibreHardwareMonitor.LibreHardwareMonitor') and not LhmInstalled() then Continue;
     if (Ids[I] = 'Microsoft.DotNet.DesktopRuntime.10') and not HasDesktopRuntime10() then Continue;
     if (Ids[I] = 'Python.Python.3.12') and (FindPython312() = '') then Continue;
+    if (Ids[I] = 'namazso.PawnIO') and not PawnIOInstalled() then Continue;
+    if (Ids[I] = 'Microsoft.DotNet.Runtime.10') and not HasNetRuntime10() then Continue;
     Present[N] := Ids[I];
     Names[N] := Name;
     N := N + 1;
@@ -604,7 +725,8 @@ begin
   Note.Left := ScaleX(16); Note.Top := Y;
   Note.Width := Form.ClientWidth - ScaleX(32);
   Note.AutoSize := False; Note.WordWrap := True; Note.Height := ScaleY(32);
-  Note.Caption := 'They are removed with winget. Removing the .NET runtime asks for administrator permission.';
+  Note.Caption := 'They are removed with winget. Removing the .NET runtime or PawnIO asks for administrator ' +
+                  'permission. LibreHardwareMonitor also uses PawnIO.';
   OkBtn := TNewButton.Create(Form);
   OkBtn.Parent := Form;
   OkBtn.Caption := 'Remove ticked';
@@ -641,7 +763,30 @@ begin
            mbError, MB_OK);
 end;
 
+{ The service is part of congee, so it goes too (for every user of this PC: there's one service).
+  Windows asks for administrator permission. }
+procedure RemoveSensorService();
+var
+  Exe: String;
+  Code: Integer;
+begin
+  if not SensorServiceInstalled() then Exit;
+  Exe := ExpandConstant('{app}\sensors\congee-sensors.exe');
+  if not FileExists(Exe) then Exe := InstalledServiceDir() + '\congee-sensors.exe';
+  UninstallProgressForm.StatusLabel.Caption := 'Removing the congee sensor service (Windows asks for administrator permission)...';
+  UninstallProgressForm.StatusLabel.Update;
+  if RunServiceSetup(Exe, '--uninstall', Code) then Exit;
+  if not UninstallSilent then
+    MsgBox('The congee sensor service could not be removed (' + IntToStr(Code) + '). To remove it, run in an ' +
+           'administrator terminal:' + #13#10 + '  "' + InstalledServiceDir() + '\congee-sensors.exe" --uninstall',
+           mbError, MB_OK);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usUninstall then OfferToRemoveDeps();
+  if CurUninstallStep = usUninstall then
+  begin
+    RemoveSensorService();
+    OfferToRemoveDeps();
+  end;
 end;

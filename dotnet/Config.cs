@@ -33,7 +33,7 @@ public static class Config
         ["monitor"] = "0",
         ["uppercase"] = "no",
         ["dpi_scale"] = "auto",
-        ["sensors_url"] = "http://localhost:8085/data.json",
+        ["sensors_url"] = "auto",          // auto: congee's sensor service, else LibreHardwareMonitor; or a data.json URL
         ["temp_bar_max"] = "100",          // °C that count as a full tempbar/tempgraph
         ["temperature_unit"] = "celsius",  // or fahrenheit: how temperature values are shown
         ["gpu"] = "auto",

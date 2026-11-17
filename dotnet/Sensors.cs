@@ -8,9 +8,10 @@ namespace Congee;
 public record Sensor(string Type, string Name, string Path, double Value, string Display, string HwId, string Hardware);
 
 /// <summary>
-/// Reads temperatures, fans, etc. from LibreHardwareMonitor's built-in web
-/// server (Options > Remote Web Server). LHM runs elevated and does the
-/// hardware access; congee only reads JSON over localhost and needs no admin.
+/// Reads temperatures, fans, etc. as JSON over localhost, so congee needs no admin rights.
+/// sensors_url "auto" (the default) reads congee's own sensor service (congee-sensors, a Windows
+/// service setup installs) and falls back to LibreHardwareMonitor's web server (Options > Remote
+/// Web Server); both serve the same format. Any other value is the one URL to read.
 /// </summary>
 public sealed class Sensors
 {
@@ -25,7 +26,18 @@ public sealed class Sensors
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(2) };
     const double StaleSeconds = 10;
 
+    public const string ServiceUrl = "http://127.0.0.1:8086/data.json";
+    public const string LhmUrl = "http://localhost:8085/data.json";
+    static readonly string[] AutoUrls = [ServiceUrl, LhmUrl];
+
     public string Url { get; private set; } = Config.Defaults["sensors_url"];
+    int autoIdx;
+    string? lastSource;
+
+    public bool IsAuto => IsAutoUrl(Url);
+    public static bool IsAutoUrl(string url) => url.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase) || url.Trim().Length == 0;
+    /// <summary>The URL being read: in auto mode, whichever source answered last.</summary>
+    public string ActiveUrl => IsAuto ? AutoUrls[autoIdx] : Url;
     double interval = 1.0;
     volatile List<Sensor> items = [];
     Dictionary<(string, string), (Sensor s, double t)> seen = [];
@@ -37,7 +49,7 @@ public sealed class Sensors
 
     public void Configure(string url, double updateInterval)
     {
-        if (url != Url) { items = []; Ok = false; last = -1e9; seen = []; }
+        if (url != Url) { items = []; Ok = false; last = -1e9; seen = []; autoIdx = 0; }
         Url = url;
         interval = Math.Max(0.5, updateInterval);
     }
@@ -66,7 +78,23 @@ public sealed class Sensors
     {
         try
         {
-            string json = await Http.GetStringAsync(Url).ConfigureAwait(false);
+            string json;
+            if (!IsAuto) json = await Http.GetStringAsync(Url).ConfigureAwait(false);
+            else
+            {
+                // Try the source that answered last, then the other one.
+                try { json = await Http.GetStringAsync(AutoUrls[autoIdx]).ConfigureAwait(false); }
+                catch (Exception)
+                {
+                    autoIdx = (autoIdx + 1) % AutoUrls.Length;
+                    json = await Http.GetStringAsync(AutoUrls[autoIdx]).ConfigureAwait(false);
+                }
+                if (ActiveUrl != lastSource)
+                {
+                    lastSource = ActiveUrl;
+                    Log.Write("sensors: reading " + (autoIdx == 0 ? "congee's sensor service" : "LibreHardwareMonitor") + " (" + ActiveUrl + ")");
+                }
+            }
             using var doc = JsonDocument.Parse(json);
             var fresh = new List<Sensor>();
             Walk(doc.RootElement, [], null, fresh, ("", ""));

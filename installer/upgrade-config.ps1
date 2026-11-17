@@ -11,7 +11,9 @@
 #   1.2.2  logging setting (yes; the tray menu's Logging item switches it);
 #          start_lhm setting (ask: offer to start LibreHardwareMonitor if it isn't running)
 #   1.2.3  rendering setting (software: the .NET edition draws with the CPU, using less memory)
-#   1.2.4  stop_lhm setting (ask: on Exit congee, offer to stop LibreHardwareMonitor too)
+#   1.2.4  stop_lhm setting (ask: on Exit congee, offer to stop LibreHardwareMonitor too);
+#          the no-sensors hint no longer says to start LibreHardwareMonitor (congee's own sensor
+#          service is the default now)
 param([string]$Config = (Join-Path $env:APPDATA 'congee\congee.conf'))
 $ErrorActionPreference = 'Stop'
 
@@ -69,6 +71,13 @@ if ($text -notmatch '(?m)^\s*rendering\b' -and $text -match '(?m)^TEXT\s*$') {
              "rendering software`n`n"
     $text = ([regex]'(?m)^TEXT\s*$').Replace($text, { param($m) $block + $m.Value }, 1)
     $changes.Add('added the rendering setting (software: the .NET edition uses less memory)')
+}
+
+# --- no-sensors hint: congee's sensor service replaces LibreHardwareMonitor ------------------
+$oldHint = 'Temps/fans: start LibreHardwareMonitor (as admin)'
+if ($text.Contains($oldHint)) {
+    $text = $text.Replace($oldHint, 'Temps/fans: no sensor data (see README)')
+    $changes.Add('the no-sensors hint now points to the README instead of LibreHardwareMonitor')
 }
 
 # --- ${temp_unit} instead of a fixed degrees-C sign after temperature variables -------------
